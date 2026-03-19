@@ -10,12 +10,18 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as SwapRouteImport } from './routes/swap'
+import { Route as SendRouteImport } from './routes/send'
 import { Route as QueriesRouteImport } from './routes/queries'
 import { Route as IndexRouteImport } from './routes/index'
 
 const SwapRoute = SwapRouteImport.update({
   id: '/swap',
   path: '/swap',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SendRoute = SendRouteImport.update({
+  id: '/send',
+  path: '/send',
   getParentRoute: () => rootRouteImport,
 } as any)
 const QueriesRoute = QueriesRouteImport.update({
@@ -32,30 +38,34 @@ const IndexRoute = IndexRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/queries': typeof QueriesRoute
+  '/send': typeof SendRoute
   '/swap': typeof SwapRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/queries': typeof QueriesRoute
+  '/send': typeof SendRoute
   '/swap': typeof SwapRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/queries': typeof QueriesRoute
+  '/send': typeof SendRoute
   '/swap': typeof SwapRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/queries' | '/swap'
+  fullPaths: '/' | '/queries' | '/send' | '/swap'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/queries' | '/swap'
-  id: '__root__' | '/' | '/queries' | '/swap'
+  to: '/' | '/queries' | '/send' | '/swap'
+  id: '__root__' | '/' | '/queries' | '/send' | '/swap'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   QueriesRoute: typeof QueriesRoute
+  SendRoute: typeof SendRoute
   SwapRoute: typeof SwapRoute
 }
 
@@ -66,6 +76,13 @@ declare module '@tanstack/react-router' {
       path: '/swap'
       fullPath: '/swap'
       preLoaderRoute: typeof SwapRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/send': {
+      id: '/send'
+      path: '/send'
+      fullPath: '/send'
+      preLoaderRoute: typeof SendRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/queries': {
@@ -88,6 +105,7 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   QueriesRoute: QueriesRoute,
+  SendRoute: SendRoute,
   SwapRoute: SwapRoute,
 }
 export const routeTree = rootRouteImport

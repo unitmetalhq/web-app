@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/sidebar"
 import {
   Home,
+  Send,
   ArrowRightLeft,
   Database,
   Settings,
@@ -20,6 +21,7 @@ import { Link } from "@tanstack/react-router"
 
 const workspaceItems = [
   { title: "Home", icon: Home, to: "/" },
+  { title: "Send", icon: Send, to: "/send" },
   { title: "Swap", icon: ArrowRightLeft, to: "/swap" },
   { title: "Queries", icon: Database, to: "/queries" },
 ]
