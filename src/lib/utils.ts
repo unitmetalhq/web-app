@@ -14,3 +14,11 @@ export function truncateHash(hash: string | undefined) {
   if (!hash) return "";
   return `${hash.slice(0, 6)}...${hash.slice(-4)}`;
 }
+
+export function serializeTransactionObject(transactionObject: object): string {
+  return JSON.stringify(
+    transactionObject,
+    (_key, value) => (typeof value === "bigint" ? `0x${value.toString(16)}` : value),
+    2
+  );
+}

@@ -19,9 +19,16 @@ import {
 import { normalize } from "viem/ens";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupInput,
+} from "@/components/ui/input-group"
 import { RefreshCcw } from "lucide-react";
 import { truncateHash } from "@/lib/utils";
 import { TransactionObject } from "@/components/transaction-object";
+import { Kbd } from "@/components/ui/kbd";
 
 export default function SendNativeTokenForm({
   selectedChain,
@@ -83,7 +90,9 @@ export default function SendNativeTokenForm({
     form.store,
     (state) => state.values.receivingAddress || ""
   );
+  // get amount values
   const amount = useStore(form.store, (state) => state.values.amount || "");
+  // get message values
   const message = useStore(form.store, (state) => state.values.message || "");
 
   // get ENS address
@@ -172,6 +181,18 @@ export default function SendNativeTokenForm({
     form.reset();
   }
 
+  // Handle keyboard ENS lookup
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.ctrlKey && e.key === "s") {
+        e.preventDefault();
+        refetchEnsAddress();
+      }
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [refetchEnsAddress]);
+
   useEffect(() => {
     // reset the transaction state
     resetSendNativeTransaction();
@@ -233,9 +254,9 @@ export default function SendNativeTokenForm({
             }}
           >
             {(field) => (
-              <div className="flex flex-col gap-2">
+              <div className="flex flex-col gap-0">
                 <div className="flex flex-row gap-2 items-center justify-between">
-                  <p className="text-muted-foreground">Sending</p>
+                  <p className="text-muted-foreground">Amount</p>
                   <div className="flex flex-row gap-4">
                     <button
                       type="button"
@@ -269,7 +290,7 @@ export default function SendNativeTokenForm({
                         field.handleChange(
                           formatEther(
                             ((nativeBalance?.value || BigInt(0)) * BigInt(3)) /
-                              BigInt(4)
+                            BigInt(4)
                           )
                         )
                       }
@@ -371,11 +392,12 @@ export default function SendNativeTokenForm({
           >
             {(field) => (
               <div className="flex flex-col gap-2">
-                <div className="flex flex-row gap-2 items-center justify-between">
+                <div className="flex flex-row gap-2 items-center">
                   <p className="text-muted-foreground">Recipient</p>
+                  <Kbd>Ctrl + S</Kbd>
                 </div>
-                <div className="flex flex-row gap-2">
-                  <Input
+                <InputGroup>
+                  <InputGroupInput
                     id={field.name}
                     name={field.name}
                     value={field.state.value || ""}
@@ -385,25 +407,27 @@ export default function SendNativeTokenForm({
                     placeholder="Address (0x...) or ENS (.eth)"
                     required
                   />
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="rounded-none hover:cursor-pointer"
-                    type="button"
-                    onClick={() => refetchEnsAddress()}
-                  >
-                    {isLoadingEnsAddress ? (
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                    ) : (
-                      <Search />
-                    )}
-                  </Button>
-                </div>
+                  <InputGroupAddon align="inline-end">
+                    <InputGroupButton
+                      aria-label="ENS lookup"
+                      title="Copy"
+                      size="icon-xs"
+                      onClick={() => refetchEnsAddress()}
+                      className="hover:cursor-pointer"
+                    >
+                      {isLoadingEnsAddress ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <Search />
+                      )}
+                    </InputGroupButton>
+                  </InputGroupAddon>
+                </InputGroup>
                 <ReceivingAddressFieldInfo
-                 field={field}
-                 ensAddress={ensAddress}
-                 isLoadingEnsAddress={isLoadingEnsAddress}
-                 isErrorEnsAddress={isErrorEnsAddress}
+                  field={field}
+                  ensAddress={ensAddress}
+                  isLoadingEnsAddress={isLoadingEnsAddress}
+                  isErrorEnsAddress={isErrorEnsAddress}
                 />
               </div>
             )}
@@ -500,7 +524,7 @@ export default function SendNativeTokenForm({
           </form.Subscribe>
           {showTxObject && (
             <TransactionObject
-              tx={preparedTx}
+              transactionObject={preparedTx}
               isLoading={isLoadingPreparedTx}
               isError={isErrorPreparedTx}
             />
@@ -566,12 +590,11 @@ function AmountFieldInfo({ field }: { field: AnyFieldApi }) {
         <em>Please enter an amount to send</em>
       ) : field.state.meta.isTouched && !field.state.meta.isValid ? (
         <em
-          className={`${
-            field.state.meta.errors.join(",") ===
+          className={`${field.state.meta.errors.join(",") ===
             "Please enter an amount to send"
-              ? ""
-              : "text-red-400"
-          }`}
+            ? ""
+            : "text-red-400"
+            }`}
         >
           {field.state.meta.errors.join(",")}
         </em>
@@ -600,12 +623,11 @@ function ReceivingAddressFieldInfo({
         <em>Please enter an address or ENS</em>
       ) : field.state.meta.isTouched && !field.state.meta.isValid ? (
         <em
-          className={`${
-            field.state.meta.errors.join(",") ===
+          className={`${field.state.meta.errors.join(",") ===
             "Please enter an address or ENS"
-              ? ""
-              : "text-red-400"
-          }`}
+            ? ""
+            : "text-red-400"
+            }`}
         >
           {field.state.meta.errors.join(",")}
         </em>
@@ -618,7 +640,7 @@ function ReceivingAddressFieldInfo({
       ) : ensAddress === null ? (
         <div className="text-red-400 text-xs">Invalid ENS</div>
       ) : (
-        <em className="text-green-500">ok!</em>
+        <em className="text-green-500">ok! Click icon to look up ENS</em>
       )}
       {field.state.meta.isValidating ? "Validating..." : null}
     </>
