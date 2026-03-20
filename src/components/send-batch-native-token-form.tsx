@@ -1,5 +1,3 @@
-"use client";
-
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { EditorView } from "@codemirror/view";
 import { githubLight, githubDark } from "@uiw/codemirror-theme-github";

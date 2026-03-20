@@ -1,12 +1,10 @@
-"use client";
-
 import { lazy, Suspense, useMemo, useState } from "react";
 import { EditorView } from "@codemirror/view";
 import { githubLight, githubDark } from "@uiw/codemirror-theme-github";
 import { useTheme } from "@/components/theme-provider";
 import { Button } from "@/components/ui/button";
 import { Loader2, Wallet, Sigma, Eraser } from "lucide-react";
-import { parseEther, formatEther, type Address } from "viem";
+import { parseEther, formatEther } from "viem";
 import { useWriteContract, useWaitForTransactionReceipt, useConfig, useSimulateContract } from "wagmi";
 import { GASLITEDROP_CONTRACT_ADDRESS } from "@/lib/constants";
 import { GasliteDropAbi } from "@/lib/abis/gaslite-drop-abi";
