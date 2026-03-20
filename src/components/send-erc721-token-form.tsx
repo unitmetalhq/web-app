@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { useForm, useStore } from "@tanstack/react-form";
 import type { AnyFieldApi } from "@tanstack/react-form";
 import { Loader2, Check, ExternalLink, Search, Eraser } from "lucide-react";
-import { type Address, erc20Abi, formatUnits, parseUnits } from "viem";
+import { type Address } from "viem";
 import {
   useConfig,
   useWaitForTransactionReceipt,
@@ -14,7 +14,6 @@ import {
   useSimulateContract,
 } from "wagmi";
 import { normalize } from "viem/ens";
-import { useMediaQuery } from "@/hooks/use-media-query";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   InputGroup,
@@ -27,16 +26,55 @@ import { truncateHash } from "@/lib/utils";
 import { TransactionObject } from "@/components/transaction-object";
 import { Kbd } from "@/components/ui/kbd";
 
-export default function SendErc20TokenForm({
+const erc721Abi = [
+  {
+    inputs: [{ name: "owner", type: "address" }],
+    name: "balanceOf",
+    outputs: [{ name: "", type: "uint256" }],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
+    inputs: [],
+    name: "name",
+    outputs: [{ name: "", type: "string" }],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
+    inputs: [],
+    name: "symbol",
+    outputs: [{ name: "", type: "string" }],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
+    inputs: [{ name: "tokenId", type: "uint256" }],
+    name: "ownerOf",
+    outputs: [{ name: "", type: "address" }],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
+    inputs: [
+      { name: "from", type: "address" },
+      { name: "to", type: "address" },
+      { name: "tokenId", type: "uint256" },
+    ],
+    name: "safeTransferFrom",
+    outputs: [],
+    stateMutability: "nonpayable",
+    type: "function",
+  },
+] as const;
+
+export default function SendErc721TokenForm({
   selectedChain,
 }: {
   selectedChain: number | null;
 }) {
   // get Wagmi config
   const config = useConfig();
-
-  // check if desktop
-  const isDesktop = useMediaQuery("(min-width: 768px)");
 
   // get connection
   const connection = useConnection();
@@ -48,12 +86,12 @@ export default function SendErc20TokenForm({
   const form = useForm({
     defaultValues: {
       tokenAddress: "",
+      tokenId: "",
       receivingAddress: "",
-      amount: "",
-      type: "erc20",
+      type: "erc721",
     },
     onSubmit: async ({ value }) => {
-      if (value.type === "erc20") {
+      if (value.type === "erc721") {
         // resolve ENS to address if needed
         let recipientAddress: Address;
         if (value.receivingAddress.endsWith(".eth")) {
@@ -66,12 +104,12 @@ export default function SendErc20TokenForm({
           recipientAddress = value.receivingAddress as Address;
         }
 
-        // execute the send erc20 transaction
-        sendErc20Transaction({
+        // execute the send erc721 transaction
+        sendErc721Transaction({
           address: resolvedTokenAddress as Address,
-          abi: erc20Abi,
-          functionName: "transfer",
-          args: [recipientAddress, parseUnits(value.amount, tokenData?.[3]?.result || 18)],
+          abi: erc721Abi,
+          functionName: "safeTransferFrom",
+          args: [connection.address as Address, recipientAddress, BigInt(value.tokenId)],
           chainId: selectedChain || undefined,
         });
       }
@@ -84,16 +122,19 @@ export default function SendErc20TokenForm({
     (state) => state.values.tokenAddress || ""
   );
 
+  // get token ID reactively from form store
+  const tokenId = useStore(
+    form.store,
+    (state) => state.values.tokenId || ""
+  );
+
   // get receiving address reactively from form store
   const receivingAddress = useStore(
     form.store,
     (state) => state.values.receivingAddress || ""
   );
 
-  // get amount reactively from form store
-  const amount = useStore(form.store, (state) => state.values.amount || "");
-
-  // get ENS address for token
+  // get ENS address for token contract
   const {
     data: tokenEnsAddress,
     isLoading: isLoadingTokenEnsAddress,
@@ -142,6 +183,14 @@ export default function SendErc20TokenForm({
     ? (tokenEnsAddress ?? undefined)
     : (tokenAddress as Address) || undefined;
 
+  // safely parse token ID to avoid throwing on invalid input
+  let parsedTokenId: bigint | undefined;
+  try {
+    parsedTokenId = tokenId ? BigInt(tokenId) : undefined;
+  } catch {
+    parsedTokenId = undefined;
+  }
+
   // check if balance query should be enabled
   const isBalanceQueryEnabled = !!connection.chain && !!connection.address;
 
@@ -153,27 +202,28 @@ export default function SendErc20TokenForm({
     contracts: [
       {
         address: resolvedTokenAddress,
-        abi: erc20Abi,
+        abi: erc721Abi,
         functionName: "balanceOf",
         args: [connection.address as Address],
         chainId: connection.chain?.id || undefined,
       },
       {
         address: resolvedTokenAddress,
-        abi: erc20Abi,
+        abi: erc721Abi,
         functionName: "name",
         chainId: connection.chain?.id || undefined,
       },
       {
         address: resolvedTokenAddress,
-        abi: erc20Abi,
+        abi: erc721Abi,
         functionName: "symbol",
         chainId: connection.chain?.id || undefined,
       },
       {
         address: resolvedTokenAddress,
-        abi: erc20Abi,
-        functionName: "decimals",
+        abi: erc721Abi,
+        functionName: "ownerOf",
+        args: [parsedTokenId ?? BigInt(0)],
         chainId: connection.chain?.id || undefined,
       },
     ],
@@ -182,15 +232,11 @@ export default function SendErc20TokenForm({
     },
   });
 
-  // safely parse amount to avoid throwing on invalid input
-  let parsedAmount: bigint | undefined;
-  try {
-    parsedAmount = amount
-      ? parseUnits(amount, tokenData?.[3]?.result || 18)
-      : undefined;
-  } catch {
-    parsedAmount = undefined;
-  }
+  const ownerOfToken = tokenData?.[3]?.result as Address | undefined;
+  const isOwnedByUser =
+    ownerOfToken &&
+    connection.address &&
+    ownerOfToken.toLowerCase() === connection.address.toLowerCase();
 
   // prepare transaction request
   const {
@@ -199,35 +245,36 @@ export default function SendErc20TokenForm({
     isError: isErrorPreparedTx,
   } = useSimulateContract({
     address: resolvedTokenAddress,
-    abi: erc20Abi,
-    functionName: "transfer",
+    abi: erc721Abi,
+    functionName: "safeTransferFrom",
     args:
-      resolvedRecipient && parsedAmount !== undefined
-        ? [resolvedRecipient, parsedAmount]
+      connection.address && resolvedRecipient && parsedTokenId !== undefined
+        ? [connection.address, resolvedRecipient, parsedTokenId]
         : undefined,
     chainId: connection.chain?.id || undefined,
     query: {
       enabled:
         !!resolvedTokenAddress &&
+        !!connection.address &&
         !!resolvedRecipient &&
-        parsedAmount !== undefined,
+        parsedTokenId !== undefined,
     },
   });
 
-  // hook to send erc20 transaction
+  // hook to send erc721 transaction
   const {
-    data: sendErc20TransactionHash,
-    isPending: isPendingSendErc20Transaction,
-    writeContract: sendErc20Transaction,
-    reset: resetSendErc20Transaction,
+    data: sendErc721TransactionHash,
+    isPending: isPendingSendErc721Transaction,
+    writeContract: sendErc721Transaction,
+    reset: resetSendErc721Transaction,
   } = useWriteContract();
 
   // hook to wait for transaction receipt
   const {
-    isLoading: isConfirmingSendErc20Transaction,
-    isSuccess: isConfirmedSendErc20Transaction,
+    isLoading: isConfirmingSendErc721Transaction,
+    isSuccess: isConfirmedSendErc721Transaction,
   } = useWaitForTransactionReceipt({
-    hash: sendErc20TransactionHash,
+    hash: sendErc721TransactionHash,
     chainId: selectedChain || undefined,
   });
 
@@ -236,7 +283,7 @@ export default function SendErc20TokenForm({
   )?.blockExplorers?.default.url;
 
   function handleReset() {
-    resetSendErc20Transaction();
+    resetSendErc721Transaction();
     form.reset();
   }
 
@@ -253,10 +300,10 @@ export default function SendErc20TokenForm({
   }, [refetchEnsAddress]);
 
   useEffect(() => {
-    resetSendErc20Transaction();
+    resetSendErc721Transaction();
     form.reset();
     refetchTokenData();
-  }, [selectedChain, resetSendErc20Transaction, form, refetchTokenData]);
+  }, [selectedChain, resetSendErc721Transaction, form, refetchTokenData]);
 
   return (
     <form
@@ -274,7 +321,7 @@ export default function SendErc20TokenForm({
             validators={{
               onChange: ({ value }) => {
                 if (!value) {
-                  return "Please enter a token address";
+                  return "Please enter a contract address";
                 }
                 return undefined;
               },
@@ -283,7 +330,7 @@ export default function SendErc20TokenForm({
             {(field) => (
               <div className="flex flex-col gap-2">
                 <div className="flex flex-row gap-2 items-center">
-                  <p className="text-muted-foreground">Token</p>
+                  <p className="text-muted-foreground">Contract</p>
                 </div>
                 <InputGroup>
                   <InputGroupInput
@@ -329,40 +376,20 @@ export default function SendErc20TokenForm({
             )}
           </form.Field>
         </div>
-        {/* amount field */}
+        {/* token ID field */}
         <div>
           <form.Field
-            name="amount"
+            name="tokenId"
             validators={{
               onChange: ({ value }) => {
                 if (!value) {
-                  return "Please enter an amount to send";
+                  return "Please enter a token ID";
                 }
-
-                const numValue = parseFloat(value);
-                if (isNaN(numValue)) {
-                  return "Please enter a valid number";
-                }
-
-                if (numValue <= 0) {
-                  return "Amount must be greater than 0";
-                }
-
                 try {
-                  const valueInUnits = parseUnits(
-                    value,
-                    tokenData?.[3]?.result || 18
-                  );
-                  if (
-                    tokenData?.[0]?.result &&
-                    valueInUnits > tokenData[0].result
-                  ) {
-                    return "Insufficient balance";
-                  }
+                  BigInt(value);
                 } catch {
-                  return "Invalid amount format";
+                  return "Please enter a valid token ID";
                 }
-
                 return undefined;
               },
             }}
@@ -370,94 +397,20 @@ export default function SendErc20TokenForm({
             {(field) => (
               <div className="flex flex-col gap-0">
                 <div className="flex flex-row gap-2 items-center justify-between">
-                  <p className="text-muted-foreground">Amount</p>
-                  <div className="flex flex-row gap-4">
-                    <button
-                      type="button"
-                      onClick={() =>
-                        field.handleChange(
-                          formatUnits(
-                            (tokenData?.[0]?.result || BigInt(0)) / BigInt(4),
-                            tokenData?.[3]?.result || 18
-                          )
-                        )
-                      }
-                      className="hover:cursor-pointer underline underline-offset-4"
-                    >
-                      25%
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        field.handleChange(
-                          formatUnits(
-                            (tokenData?.[0]?.result || BigInt(0)) / BigInt(2),
-                            tokenData?.[3]?.result || 18
-                          )
-                        )
-                      }
-                      className="hover:cursor-pointer underline underline-offset-4"
-                    >
-                      50%
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        field.handleChange(
-                          formatUnits(
-                            ((tokenData?.[0]?.result || BigInt(0)) *
-                              BigInt(3)) /
-                              BigInt(4),
-                            tokenData?.[3]?.result || 18
-                          )
-                        )
-                      }
-                      className="hover:cursor-pointer underline underline-offset-4"
-                    >
-                      75%
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        field.handleChange(
-                          formatUnits(
-                            tokenData?.[0]?.result || BigInt(0),
-                            tokenData?.[3]?.result || 18
-                          )
-                        )
-                      }
-                      className="hover:cursor-pointer underline underline-offset-4"
-                    >
-                      Max
-                    </button>
-                  </div>
+                  <p className="text-muted-foreground">Token ID</p>
                 </div>
                 <div className="flex flex-row items-center justify-between my-2">
-                  {isDesktop ? (
-                    <input
-                      id={field.name}
-                      name={field.name}
-                      value={field.state.value || ""}
-                      onChange={(e) => field.handleChange(e.target.value)}
-                      className="bg-transparent text-2xl outline-none w-full [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                      type="number"
-                      placeholder="0"
-                      required
-                    />
-                  ) : (
-                    <input
-                      id={field.name}
-                      name={field.name}
-                      value={field.state.value || ""}
-                      onChange={(e) => field.handleChange(e.target.value)}
-                      className="bg-transparent text-2xl outline-none w-full [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                      type="number"
-                      inputMode="decimal"
-                      pattern="[0-9]*"
-                      placeholder="0"
-                      required
-                    />
-                  )}
+                  <input
+                    id={field.name}
+                    name={field.name}
+                    value={field.state.value || ""}
+                    onChange={(e) => field.handleChange(e.target.value)}
+                    className="bg-transparent text-2xl outline-none w-full [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                    type="number"
+                    inputMode="numeric"
+                    placeholder="0"
+                    required
+                  />
                 </div>
                 <div className="flex flex-row items-center justify-between">
                   <div className="flex flex-row gap-2">
@@ -465,15 +418,26 @@ export default function SendErc20TokenForm({
                       {isBalanceQueryEnabled && isLoadingTokenData ? (
                         <Skeleton className="w-10 h-4" />
                       ) : (
-                        formatUnits(
-                          tokenData?.[0]?.result || BigInt(0),
-                          tokenData?.[3]?.result || 18
-                        )
+                        `${tokenData?.[0]?.result?.toString() ?? "0"} owned`
                       )}
                     </div>
-                    <p className="text-muted-foreground">
-                      {tokenData?.[2]?.result ? tokenData[2].result : "-"}
-                    </p>
+                    {parsedTokenId !== undefined && (
+                      <p
+                        className={
+                          isLoadingTokenData
+                            ? "text-muted-foreground"
+                            : isOwnedByUser
+                              ? "text-green-500"
+                              : "text-red-400"
+                        }
+                      >
+                        {isLoadingTokenData
+                          ? "..."
+                          : isOwnedByUser
+                            ? "✓ yours"
+                            : "✗ not yours"}
+                      </p>
+                    )}
                   </div>
                   <Button
                     variant="ghost"
@@ -489,7 +453,7 @@ export default function SendErc20TokenForm({
                     )}
                   </Button>
                 </div>
-                <AmountFieldInfo field={field} />
+                <TokenIdFieldInfo field={field} />
               </div>
             )}
           </form.Field>
@@ -554,14 +518,14 @@ export default function SendErc20TokenForm({
           <form.Subscribe
             selector={(state) => [
               state.canSubmit,
-              isPendingSendErc20Transaction,
-              isConfirmingSendErc20Transaction,
+              isPendingSendErc721Transaction,
+              isConfirmingSendErc721Transaction,
             ]}
           >
             {([
               canSubmit,
-              isPendingSendErc20Transaction,
-              isConfirmingSendErc20Transaction,
+              isPendingSendErc721Transaction,
+              isConfirmingSendErc721Transaction,
             ]) => (
               <div className="grid grid-cols-5 gap-2">
                 <Button
@@ -571,8 +535,8 @@ export default function SendErc20TokenForm({
                   type="reset"
                   disabled={
                     !canSubmit ||
-                    isPendingSendErc20Transaction ||
-                    isConfirmingSendErc20Transaction
+                    isPendingSendErc721Transaction ||
+                    isConfirmingSendErc721Transaction
                   }
                   onClick={handleReset}
                 >
@@ -584,8 +548,8 @@ export default function SendErc20TokenForm({
                   type="button"
                   disabled={
                     !canSubmit ||
-                    isPendingSendErc20Transaction ||
-                    isConfirmingSendErc20Transaction
+                    isPendingSendErc721Transaction ||
+                    isConfirmingSendErc721Transaction
                   }
                   onClick={() => setShowTxObject((prev) => !prev)}
                 >
@@ -596,15 +560,15 @@ export default function SendErc20TokenForm({
                   type="submit"
                   disabled={
                     !canSubmit ||
-                    isPendingSendErc20Transaction ||
-                    isConfirmingSendErc20Transaction
+                    isPendingSendErc721Transaction ||
+                    isConfirmingSendErc721Transaction
                   }
                 >
-                  {isPendingSendErc20Transaction ? (
+                  {isPendingSendErc721Transaction ? (
                     <Loader2 className="w-4 h-4 animate-spin" />
-                  ) : isConfirmingSendErc20Transaction ? (
+                  ) : isConfirmingSendErc721Transaction ? (
                     <Loader2 className="w-4 h-4 animate-spin" />
-                  ) : isConfirmedSendErc20Transaction ? (
+                  ) : isConfirmedSendErc721Transaction ? (
                     <Check className="w-4 h-4" />
                   ) : (
                     <>Send</>
@@ -623,17 +587,17 @@ export default function SendErc20TokenForm({
           <div className="border-t-2 border-primary pt-4 mt-4">
             <div className="flex flex-col gap-1">
               <div className="flex flex-row gap-2 items-center">
-                {isPendingSendErc20Transaction ? (
+                {isPendingSendErc721Transaction ? (
                   <div className="flex flex-row gap-2 items-center">
                     <Loader2 className="w-4 h-4 animate-spin" />
                     <p>Signing transaction...</p>
                   </div>
-                ) : isConfirmingSendErc20Transaction ? (
+                ) : isConfirmingSendErc721Transaction ? (
                   <div className="flex flex-row gap-2 items-center">
                     <Loader2 className="w-4 h-4 animate-spin" />
                     <p>Confirming transaction...</p>
                   </div>
-                ) : isConfirmedSendErc20Transaction ? (
+                ) : isConfirmedSendErc721Transaction ? (
                   <div className="flex flex-row gap-2 items-center">
                     <Check className="w-4 h-4" />
                     <p>Transaction confirmed</p>
@@ -645,17 +609,17 @@ export default function SendErc20TokenForm({
                   </div>
                 )}
               </div>
-              {sendErc20TransactionHash ? (
+              {sendErc721TransactionHash ? (
                 <div className="flex flex-row gap-2 items-center">
                   <p className="text-muted-foreground">&gt;</p>
                   <a
                     target="_blank"
                     rel="noopener noreferrer"
                     className="underline underline-offset-4 hover:cursor-pointer"
-                    href={`${selectedChainBlockExplorer}/tx/${sendErc20TransactionHash}`}
+                    href={`${selectedChainBlockExplorer}/tx/${sendErc721TransactionHash}`}
                   >
                     <div className="flex flex-row gap-2 items-center">
-                      {truncateHash(sendErc20TransactionHash)}
+                      {truncateHash(sendErc721TransactionHash)}
                       <ExternalLink className="w-4 h-4" />
                     </div>
                   </a>
@@ -688,12 +652,12 @@ function TokenAddressFieldInfo({
   return (
     <>
       {!field.state.meta.isTouched ? (
-        <em>Please enter a token address or ENS</em>
+        <em>Please enter a contract address or ENS</em>
       ) : field.state.meta.isTouched && !field.state.meta.isValid ? (
         <em
           className={`${
             field.state.meta.errors.join(",") ===
-            "Please enter a token address or ENS"
+            "Please enter a contract address or ENS"
               ? ""
               : "text-red-400"
           }`}
@@ -716,16 +680,15 @@ function TokenAddressFieldInfo({
   );
 }
 
-function AmountFieldInfo({ field }: { field: AnyFieldApi }) {
+function TokenIdFieldInfo({ field }: { field: AnyFieldApi }) {
   return (
     <>
       {!field.state.meta.isTouched ? (
-        <em>Please enter an amount to send</em>
+        <em>Please enter a token ID</em>
       ) : field.state.meta.isTouched && !field.state.meta.isValid ? (
         <em
           className={`${
-            field.state.meta.errors.join(",") ===
-            "Please enter an amount to send"
+            field.state.meta.errors.join(",") === "Please enter a token ID"
               ? ""
               : "text-red-400"
           }`}

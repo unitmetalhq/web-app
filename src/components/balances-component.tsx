@@ -2,8 +2,6 @@ import { useBalance } from "wagmi";
 import { useConfig, useConnection } from "wagmi";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatUnits } from "viem";
-import { Button } from "@/components/ui/button";
-import { RefreshCcw } from "lucide-react";
 
 export default function BalancesComponent() {
   const config = useConfig();
@@ -27,16 +25,9 @@ export default function BalancesComponent() {
   });
 
   return (
-    <div className="flex flex-col border-2 border-primary gap-2 pb-8">
+    <div className="flex flex-col border-2 border-primary gap-2 pb-8 h-fit">
       <div className="flex flex-row justify-between items-center bg-primary text-secondary pl-1">
         <h1 className="text-md font-bold">Balances</h1>
-        <Button
-            className="hover:cursor-pointer rounded-none"
-            size="icon"
-            onClick={() => refetchBalance()}
-          >
-            <RefreshCcw />
-          </Button>
       </div>
       {isBalanceQueryEnabled && isErrorBalance && (
         <div className="flex flex-col gap-4 px-4 py-2">
