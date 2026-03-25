@@ -33,9 +33,9 @@ const config = getDefaultConfig({
   projectId: import.meta.env.VITE_WALLETCONNECT_PROJECT_ID!,
   chains: [mainnet, base, arbitrum],
   transports: {
-    [mainnet.id]: http(import.meta.env.VITE_MAINNET_RPC_URL!),
-    [base.id]: http(import.meta.env.VITE_BASE_RPC_URL!),
-    [arbitrum.id]: http(import.meta.env.VITE_ARBITRUM_RPC_URL!),
+    [mainnet.id]: http(import.meta.env.VITE_RPC_URL_ETHEREUM!),
+    [base.id]: http(import.meta.env.VITE_RPC_URL_BASE!),
+    [arbitrum.id]: http(import.meta.env.VITE_RPC_URL_ARBITRUM!),
   },
 })
 
