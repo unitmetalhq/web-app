@@ -1,27 +1,22 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useSearch, useNavigate } from "@tanstack/react-router";
 import { Button } from "@/components/ui/button";
 import { useForm, useStore } from "@tanstack/react-form";
-import type { AnyFieldApi } from "@tanstack/react-form";
+// import type { AnyFieldApi } from "@tanstack/react-form";
 import {
   Loader2,
   Check,
-  ExternalLink,
   ArrowUpDown,
   Eraser,
   RefreshCcw,
   ChevronDown,
   Quote
 } from "lucide-react";
-import { type Address, erc20Abi, formatUnits, parseUnits } from "viem";
+import { type Address, erc20Abi, formatUnits } from "viem";
 import {
-  useConfig,
-  useWaitForTransactionReceipt,
-  useReadContracts,
   useReadContract,
   useBalance,
-  useWriteContract,
   useConnection,
   useCapabilities,
 } from "wagmi";
@@ -55,25 +50,20 @@ type TokenListToken = {
   logoURI?: string;
 };
 
-export default function SwapComponent({
-  selectedChain,
-}: {
-  selectedChain: number | null;
-}) {
+export default function SwapComponent() {
   return (
     <div className="flex flex-col border-2 border-primary gap-2 pb-8">
       <div className="flex flex-row justify-between items-center bg-primary text-secondary pl-1">
         <h1 className="text-md font-bold">Swap</h1>
       </div>
       <div className="flex flex-col gap-4 px-4 py-2">
-        <SwapForm selectedChain={selectedChain} />
+        <SwapForm />
       </div>
     </div>
   );
 }
 
-function SwapForm({ selectedChain }: { selectedChain: number | null }) {
-  const config = useConfig();
+function SwapForm() {
   const isDesktop = useMediaQuery("(min-width: 768px)");
   const connection = useConnection();
 
@@ -90,7 +80,7 @@ function SwapForm({ selectedChain }: { selectedChain: number | null }) {
     staleTime: Infinity,
   });
 
-  const effectiveChain = selectedChain ?? search.chain ?? connection.chain?.id ?? null;
+  const effectiveChain = search.chain ?? connection.chain?.id ?? null;
   const tokens = effectiveChain
     ? (tokenList?.tokens.filter((t) => t.chainId === effectiveChain) ?? [])
     : [];
@@ -116,8 +106,6 @@ function SwapForm({ selectedChain }: { selectedChain: number | null }) {
   // const tokenOutMeta = tokens.find((t) => t.address === tokenOut);
   // const tokenInDecimals = tokenInMeta?.decimals ?? 18;
   // const tokenOutDecimals = tokenOutMeta?.decimals ?? 18;
-
-  const isBalanceQueryEnabled = !!connection.chain && !!connection.address;
 
   const { data: capabilities } = useCapabilities();
   const supportsAtomicBatch =
@@ -673,38 +661,38 @@ function TokenPickerDialog({
   );
 }
 
-function TokenFieldInfo({ field }: { field: AnyFieldApi }) {
-  return (
-    <>
-      {field.state.meta.isTouched && !field.state.meta.isValid ? (
-        <em className="text-red-400">{field.state.meta.errors.join(",")}</em>
-      ) : field.state.meta.isTouched ? (
-        <em className="text-green-500">ok!</em>
-      ) : null}
-      {field.state.meta.isValidating ? "Validating..." : null}
-    </>
-  );
-}
+// function TokenFieldInfo({ field }: { field: AnyFieldApi }) {
+//   return (
+//     <>
+//       {field.state.meta.isTouched && !field.state.meta.isValid ? (
+//         <em className="text-red-400">{field.state.meta.errors.join(",")}</em>
+//       ) : field.state.meta.isTouched ? (
+//         <em className="text-green-500">ok!</em>
+//       ) : null}
+//       {field.state.meta.isValidating ? "Validating..." : null}
+//     </>
+//   );
+// }
 
-function AmountFieldInfo({ field }: { field: AnyFieldApi }) {
-  return (
-    <>
-      {!field.state.meta.isTouched ? (
-        <em>Please enter an amount to swap</em>
-      ) : field.state.meta.isTouched && !field.state.meta.isValid ? (
-        <em
-          className={
-            field.state.meta.errors.join(",") === "Please enter an amount"
-              ? ""
-              : "text-red-400"
-          }
-        >
-          {field.state.meta.errors.join(",")}
-        </em>
-      ) : (
-        <em className="text-green-500">ok!</em>
-      )}
-      {field.state.meta.isValidating ? "Validating..." : null}
-    </>
-  );
-}
+// function AmountFieldInfo({ field }: { field: AnyFieldApi }) {
+//   return (
+//     <>
+//       {!field.state.meta.isTouched ? (
+//         <em>Please enter an amount to swap</em>
+//       ) : field.state.meta.isTouched && !field.state.meta.isValid ? (
+//         <em
+//           className={
+//             field.state.meta.errors.join(",") === "Please enter an amount"
+//               ? ""
+//               : "text-red-400"
+//           }
+//         >
+//           {field.state.meta.errors.join(",")}
+//         </em>
+//       ) : (
+//         <em className="text-green-500">ok!</em>
+//       )}
+//       {field.state.meta.isValidating ? "Validating..." : null}
+//     </>
+//   );
+// }
