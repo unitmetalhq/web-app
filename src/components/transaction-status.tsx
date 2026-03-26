@@ -16,7 +16,7 @@ export function TransactionStatus({
   blockExplorerUrl: string | undefined;
 }) {
   return (
-    <div className="border-t-2 border-primary pt-4 mt-4">
+    <div className="bg-secondary p-2 text-xs">
       <div className="flex flex-col gap-1">
         <div className="flex flex-row gap-2 items-center">
           {isPending ? (
