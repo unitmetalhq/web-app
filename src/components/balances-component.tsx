@@ -1,10 +1,17 @@
 import { useBalance, useConfig, useConnection, useReadContracts } from "wagmi";
+import { useQuery } from "@tanstack/react-query";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatUnits, erc20Abi } from "viem";
 import type { Address } from "viem";
-import { TOKENS } from "@/lib/um-token-list";
-// import type { Token } from "@/types/token";
 import { RefreshCw } from "lucide-react";
+
+type TokenListToken = {
+  chainId: number;
+  address: `0x${string}`;
+  name: string;
+  symbol: string;
+  decimals: number;
+};
 
 
 export default function BalancesComponent() {
@@ -16,10 +23,26 @@ export default function BalancesComponent() {
   const nativeCurrency = chainId
     ? config.chains.find((c) => c.id === chainId)?.nativeCurrency
     : undefined;
-  const tokens = chainId ? (TOKENS[chainId] ?? []) : [];
+
+  const { data: tokenList } = useQuery({
+    queryKey: ["token-list"],
+    queryFn: async () => {
+      const res = await fetch("/token-list.json");
+      if (!res.ok) throw new Error("Failed to fetch token list");
+      return res.json() as Promise<{ tokens: TokenListToken[] }>;
+    },
+    staleTime: Infinity,
+  });
+
+  const ETH_SENTINEL = "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+  const tokens = chainId
+    ? (tokenList?.tokens.filter(
+        (t) => t.chainId === chainId && t.address.toLowerCase() !== ETH_SENTINEL
+      ) ?? [])
+    : [];
 
   // Single multicall for all token balances
-  const { data: tokenBalances, isLoading: isLoadingTokens, isError: isErrorTokens, refetch: refetchTokens } = useReadContracts({
+  const { data: tokenBalances, isLoading: isLoadingTokens, refetch: refetchTokens } = useReadContracts({
     contracts: tokens.map((token) => ({
       address: token.address,
       abi: erc20Abi,
@@ -58,7 +81,7 @@ export default function BalancesComponent() {
             {tokens.map((token, i) => {
               const raw = tokenBalances?.[i];
               const rawBalance = raw?.status === "success" ? (raw.result as bigint) : undefined;
-              if (!isLoadingTokens && !isErrorTokens && !rawBalance) return null;
+              if (!isLoadingTokens && rawBalance !== undefined && rawBalance === 0n) return null;
               return (
                 <BalanceRow
                   key={token.address}

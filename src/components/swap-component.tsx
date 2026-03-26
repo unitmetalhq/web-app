@@ -831,7 +831,7 @@ function RouteSelector({
   const selectedLabel = selectedRoute?.aggregator ?? (zfiQuery.isPending ? "Loading…" : "—");
 
   return (
-    <Accordion className="-mx-0">
+    <Accordion className="mx-0">
       <AccordionItem value="route">
         <AccordionTrigger className="py-0 hover:no-underline">
           <div className="flex flex-1 flex-row items-center justify-between pr-1 text-xs">

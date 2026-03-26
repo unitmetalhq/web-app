@@ -8,7 +8,7 @@ import {
   getDefaultConfig,
   lightTheme,
 } from "@rainbow-me/rainbowkit"
-import { mainnet, arbitrum, base } from "wagmi/chains"
+import { mainnet } from "wagmi/chains"
 import { WagmiProvider, http } from "wagmi"
 import "@rainbow-me/rainbowkit/styles.css"
 
@@ -31,7 +31,7 @@ import { ThemeProvider } from "@/components/theme-provider.tsx"
 const config = getDefaultConfig({
   appName: "UnitMetal Web App",
   projectId: import.meta.env.VITE_WALLETCONNECT_PROJECT_ID!,
-  chains: [mainnet, base, arbitrum],
+  chains: [mainnet],
   transports: {
     [mainnet.id]: http(import.meta.env.VITE_RPC_URL_ETHEREUM!),
     // [base.id]: http(import.meta.env.VITE_RPC_URL_BASE!),
