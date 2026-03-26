@@ -34,8 +34,8 @@ const config = getDefaultConfig({
   chains: [mainnet, base, arbitrum],
   transports: {
     [mainnet.id]: http(import.meta.env.VITE_RPC_URL_ETHEREUM!),
-    [base.id]: http(import.meta.env.VITE_RPC_URL_BASE!),
-    [arbitrum.id]: http(import.meta.env.VITE_RPC_URL_ARBITRUM!),
+    // [base.id]: http(import.meta.env.VITE_RPC_URL_BASE!),
+    // [arbitrum.id]: http(import.meta.env.VITE_RPC_URL_ARBITRUM!),
   },
 })
 
