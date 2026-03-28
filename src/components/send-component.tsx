@@ -16,6 +16,8 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import SendBatchNativeTokenForm from "./send-batch-native-token-form";
+import SendBatchErc20TokenForm from "./send-batch-erc20-token-form";
+import SendBatchErc721TokenForm from "./send-batch-erc721-token-form";
 
 
 export default function SendComponent() {
@@ -55,7 +57,7 @@ export default function SendComponent() {
   ]
 
   return (
-    <div className="flex flex-col border-2 border-primary gap-2 pb-8">
+    <div className="flex flex-col border-2 border-primary gap-2 pb-8 h-fit">
       <div className="flex flex-row justify-between items-center bg-primary text-secondary pl-1">
         <h1 className="text-md font-bold">Send</h1>
       </div>
@@ -120,10 +122,10 @@ export default function SendComponent() {
                 <SendBatchNativeTokenForm selectedChain={connection.chain?.id || null} /> 
               )}
               {selectedBatchAsset === "token" && (
-                <div>WIP</div>
+                <SendBatchErc20TokenForm selectedChain={connection.chain?.id || null} />
               )}
               {selectedBatchAsset === "nft" && (
-                <div>WIP</div>
+                <SendBatchErc721TokenForm selectedChain={connection.chain?.id || null} />
               )}
             </div>
           </TabsContent>

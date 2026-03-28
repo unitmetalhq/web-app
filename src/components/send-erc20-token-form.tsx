@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { useForm, useStore } from "@tanstack/react-form";
 import type { AnyFieldApi } from "@tanstack/react-form";
-import { Loader2, Check, ExternalLink, Search, Eraser } from "lucide-react";
+import { Loader2, Check, Search, Eraser } from "lucide-react";
 import { type Address, erc20Abi, formatUnits, parseUnits } from "viem";
 import {
   useConfig,
@@ -23,8 +23,8 @@ import {
   InputGroupInput,
 } from "@/components/ui/input-group";
 import { RefreshCcw } from "lucide-react";
-import { truncateHash } from "@/lib/utils";
 import { TransactionObject } from "@/components/transaction-object";
+import { TransactionStatus } from "@/components/transaction-status";
 import { Kbd } from "@/components/ui/kbd";
 
 export default function SendErc20TokenForm({
@@ -620,54 +620,13 @@ export default function SendErc20TokenForm({
               isError={isErrorPreparedTx}
             />
           )}
-          <div className="border-t-2 border-primary pt-4 mt-4">
-            <div className="flex flex-col gap-1">
-              <div className="flex flex-row gap-2 items-center">
-                {isPendingSendErc20Transaction ? (
-                  <div className="flex flex-row gap-2 items-center">
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    <p>Signing transaction...</p>
-                  </div>
-                ) : isConfirmingSendErc20Transaction ? (
-                  <div className="flex flex-row gap-2 items-center">
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    <p>Confirming transaction...</p>
-                  </div>
-                ) : isConfirmedSendErc20Transaction ? (
-                  <div className="flex flex-row gap-2 items-center">
-                    <Check className="w-4 h-4" />
-                    <p>Transaction confirmed</p>
-                  </div>
-                ) : (
-                  <div className="flex flex-row gap-2 items-center">
-                    <p className="text-muted-foreground">&gt;</p>
-                    <p>No pending transaction</p>
-                  </div>
-                )}
-              </div>
-              {sendErc20TransactionHash ? (
-                <div className="flex flex-row gap-2 items-center">
-                  <p className="text-muted-foreground">&gt;</p>
-                  <a
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="underline underline-offset-4 hover:cursor-pointer"
-                    href={`${selectedChainBlockExplorer}/tx/${sendErc20TransactionHash}`}
-                  >
-                    <div className="flex flex-row gap-2 items-center">
-                      {truncateHash(sendErc20TransactionHash)}
-                      <ExternalLink className="w-4 h-4" />
-                    </div>
-                  </a>
-                </div>
-              ) : (
-                <div className="flex flex-row gap-2 items-center">
-                  <p className="text-muted-foreground">&gt;</p>
-                  <p>No transaction hash</p>
-                </div>
-              )}
-            </div>
-          </div>
+          <TransactionStatus
+            isPending={isPendingSendErc20Transaction}
+            isConfirming={isConfirmingSendErc20Transaction}
+            isConfirmed={isConfirmedSendErc20Transaction}
+            txHash={sendErc20TransactionHash}
+            blockExplorerUrl={selectedChainBlockExplorer}
+          />
         </div>
       </div>
     </form>

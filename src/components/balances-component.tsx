@@ -3,7 +3,8 @@ import { useQuery } from "@tanstack/react-query";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatUnits, erc20Abi } from "viem";
 import type { Address } from "viem";
-import { RefreshCw } from "lucide-react";
+import { RefreshCw, Copy, Check } from "lucide-react";
+import { useState } from "react";
 
 type TokenListToken = {
   chainId: number;
@@ -87,6 +88,7 @@ export default function BalancesComponent() {
                   key={token.address}
                   name={token.name}
                   symbol={token.symbol}
+                  address={token.address}
                   value={formatUnits(rawBalance ?? BigInt(0), token.decimals)}
                   isLoading={isQueryEnabled && isLoadingTokens}
                   isError={raw?.status === "failure"}
@@ -141,6 +143,7 @@ function NativeBalanceRow({
 function BalanceRow({
   name,
   symbol,
+  address,
   value,
   isLoading,
   isError,
@@ -148,17 +151,36 @@ function BalanceRow({
 }: {
   name: string;
   symbol: string;
+  address?: string;
   value: string;
   isLoading: boolean;
   isError: boolean;
   onRefresh: () => void;
 }) {
+  const [copied, setCopied] = useState(false);
+
+  function handleCopy() {
+    if (!address) return;
+    navigator.clipboard.writeText(address);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  }
+
   return (
     <div className="flex flex-row justify-between items-center gap-2">
       <div className="flex flex-col gap-1">
-        <div className="flex flex-row gap-2">
+        <div className="flex flex-row gap-2 items-center">
           <h3>{name}</h3>
           <h3 className="text-muted-foreground">{symbol}</h3>
+          {address && (
+            <button
+              type="button"
+              onClick={handleCopy}
+              className="text-muted-foreground hover:text-foreground hover:cursor-pointer"
+            >
+              {copied ? <Check className="w-3 h-3 text-white" /> : <Copy className="w-3 h-3" />}
+            </button>
+          )}
         </div>
         <p>-- %</p>
       </div>

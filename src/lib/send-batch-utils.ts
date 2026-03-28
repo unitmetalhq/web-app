@@ -2,7 +2,7 @@ import { parseEther, type Address } from "viem";
 import type { ParsedRecipient, ParseError, ParseResult } from "@/types/send-batch";
 
 export type { ParsedRecipient, ParseError, ParseResult };
-export type { BatchEditorProps } from "@/types/send-batch";
+export type { BatchEditorProps, BatchTokenProps } from "@/types/send-batch";
 
 // ── parseRecipients ───────────────────────────────────────────────────────────
 

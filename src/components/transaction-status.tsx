@@ -1,5 +1,6 @@
-import { Loader2, Check, ExternalLink } from "lucide-react";
+import { Loader2, Check, ExternalLink, AlertCircle, X } from "lucide-react";
 import { truncateHash } from "@/lib/utils";
+import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 import type { Hash } from "viem";
 
 export function TransactionStatus({
@@ -8,15 +9,34 @@ export function TransactionStatus({
   isConfirmed,
   txHash,
   blockExplorerUrl,
+  error,
+  onClearError,
 }: {
   isPending: boolean;
   isConfirming: boolean;
   isConfirmed: boolean;
   txHash: Hash | undefined;
   blockExplorerUrl: string | undefined;
+  error?: string | null;
+  onClearError?: () => void;
 }) {
   return (
-    <div className="bg-secondary p-2 text-xs">
+    <div className="flex flex-col gap-2">
+      {error && (
+        <Alert variant="destructive">
+          <AlertCircle />
+          <AlertTitle className="flex items-center justify-between">
+            Error
+            {onClearError && (
+              <button onClick={onClearError} className="hover:opacity-70">
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </AlertTitle>
+          <AlertDescription className="text-xs whitespace-pre-wrap break-all">{error}</AlertDescription>
+        </Alert>
+      )}
+      <div className="bg-secondary p-2 text-xs">
       <div className="flex flex-col gap-1">
         <div className="flex flex-row gap-2 items-center">
           {isPending ? (
@@ -62,6 +82,7 @@ export function TransactionStatus({
             <p>No transaction hash</p>
           </div>
         )}
+      </div>
       </div>
     </div>
   );

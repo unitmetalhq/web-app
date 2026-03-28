@@ -1,13 +1,13 @@
-import { lazy, Suspense, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { EditorView } from "@codemirror/view";
 import { githubLight, githubDark } from "@uiw/codemirror-theme-github";
 import { useTheme } from "@/components/theme-provider";
 import { Button } from "@/components/ui/button";
 import { Loader2, Wallet, Sigma, Eraser } from "lucide-react";
-import { parseEther, formatEther } from "viem";
-import { useWriteContract, useWaitForTransactionReceipt, useConfig, useSimulateContract } from "wagmi";
-import { GASLITEDROP_CONTRACT_ADDRESS } from "@/lib/constants";
-import { GasliteDropAbi } from "@/lib/abis/gaslite-drop-abi";
+import { parseEther, formatEther, parseUnits, formatUnits, erc20Abi, type Address } from "viem";
+import { useWriteContract, useWaitForTransactionReceipt, useConfig, useSimulateContract, useReadContract, useConnection } from "wagmi";
+import { BATCH_DISTRIBUTOR_CONTRACT_ADDRESS, BATCH_DISTRIBUTOR_FEE } from "@/lib/constants";
+import { BatchDistributorAbi } from "@/lib/abis/batch-distributor-abi";
 import { TransactionStatus } from "@/components/transaction-status";
 import { TransactionObject } from "@/components/transaction-object";
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
@@ -22,8 +22,10 @@ export function BatchTextEditor({
   isLoadingNativeBalance,
   atomicBatchSupported,
   selectedChain,
+  token,
 }: BatchEditorProps) {
   const config = useConfig();
+  const connection = useConnection();
   const blockExplorerUrl = config.chains.find((c) => c.id === selectedChain)?.blockExplorers?.default.url;
 
   const { theme } = useTheme();
@@ -34,29 +36,65 @@ export function BatchTextEditor({
   const writeContract = useWriteContract();
   const { isLoading: isConfirming, isSuccess: isConfirmed } = useWaitForTransactionReceipt({ hash: writeContract.data });
 
+  const approveWrite = useWriteContract();
+  const { isLoading: isApproveConfirming, isSuccess: isApproveConfirmed } = useWaitForTransactionReceipt({ hash: approveWrite.data });
+
   const [text, setText] = useState("");
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [showTxObject, setShowTxObject] = useState(false);
+
+  const symbol = token ? token.symbol : (nativeBalance?.symbol ?? "ETH");
+
+  const parseAmount = (amount: string): bigint => {
+    if (token) return parseUnits(amount, token.decimals);
+    return parseEther(amount);
+  };
+
+  const formatAmount = (amount: bigint): string => {
+    if (token) return formatUnits(amount, token.decimals);
+    return formatEther(amount);
+  };
 
   const parsed = useMemo(() => parseRecipients(text), [text]);
 
   let totalAmount = BigInt(0);
   for (const r of parsed.valid) {
     try {
-      totalAmount += parseEther(r.amount);
+      totalAmount += parseAmount(r.amount);
     } catch {
       // ignore
     }
   }
 
-  const isOverBalance = nativeBalance ? totalAmount > nativeBalance.value : false;
-  const symbol = nativeBalance?.symbol ?? "ETH";
-  const canSubmit = parsed.valid.length > 0 && parsed.errors.length === 0 && !isOverBalance;
+  // ERC20 allowance check
+  const { data: allowance, refetch: refetchAllowance } = useReadContract({
+    address: token?.address,
+    abi: erc20Abi,
+    functionName: "allowance",
+    args: [connection.address!, BATCH_DISTRIBUTOR_CONTRACT_ADDRESS as Address],
+    query: { enabled: !!token && !!connection.address },
+  });
+
+  useEffect(() => {
+    if (isApproveConfirmed) void refetchAllowance();
+  }, [isApproveConfirmed, refetchAllowance]);
+
+  const needsApproval = !!token && allowance !== undefined && totalAmount > 0n && allowance < totalAmount;
+
+  // Balance checks
+  const isOverBalance = token
+    ? (token.balance !== undefined && totalAmount > token.balance)
+    : (nativeBalance ? totalAmount + BATCH_DISTRIBUTOR_FEE > nativeBalance.value : false);
+  const isOverNativeBalance = token
+    ? (nativeBalance ? BATCH_DISTRIBUTOR_FEE > nativeBalance.value : false)
+    : false;
+
+  const canSubmit = parsed.valid.length > 0 && parsed.errors.length === 0 && !isOverBalance && !isOverNativeBalance;
 
   const simulatedAddresses = parsed.valid.map((r) => r.address);
   const simulatedAmounts = parsed.valid.map((r) => {
     try {
-      return parseEther(r.amount);
+      return parseAmount(r.amount);
     } catch {
       return BigInt(0);
     }
@@ -66,33 +104,50 @@ export function BatchTextEditor({
     data: simulatedTx,
     isLoading: isLoadingSimulate,
     isError: isErrorSimulate,
-  } = useSimulateContract({
-    address: GASLITEDROP_CONTRACT_ADDRESS,
-    abi: GasliteDropAbi,
-    functionName: "airdropETH",
-    args: [simulatedAddresses, simulatedAmounts],
-    value: totalAmount,
-    query: {
-      enabled: showTxObject && simulatedAddresses.length > 0 && totalAmount > BigInt(0),
-    },
-  });
+  } = useSimulateContract(
+    token
+      ? {
+          address: BATCH_DISTRIBUTOR_CONTRACT_ADDRESS,
+          abi: BatchDistributorAbi,
+          functionName: "distributeToken",
+          args: [token.address, { txns: simulatedAddresses.map((addr, i) => ({ recipient: addr, amount: simulatedAmounts[i] })) }],
+          value: BATCH_DISTRIBUTOR_FEE,
+          query: { enabled: showTxObject && simulatedAddresses.length > 0 && totalAmount > 0n && !needsApproval },
+        }
+      : {
+          address: BATCH_DISTRIBUTOR_CONTRACT_ADDRESS,
+          abi: BatchDistributorAbi,
+          functionName: "distributeEther",
+          args: [{ txns: simulatedAddresses.map((addr, i) => ({ recipient: addr, amount: simulatedAmounts[i] })) }],
+          value: totalAmount + BATCH_DISTRIBUTOR_FEE,
+          query: { enabled: showTxObject && simulatedAddresses.length > 0 && totalAmount > BigInt(0) },
+        }
+  );
 
   const handleSubmit = async () => {
     setSubmitError(null);
     try {
       const addresses = parsed.valid.map((r) => r.address);
-      const amounts = parsed.valid.map((r) => parseEther(r.amount));
-      const total = amounts.reduce((a, b) => a + b, BigInt(0));
+      const amounts = parsed.valid.map((r) => parseAmount(r.amount));
 
       if (atomicBatchSupported) {
         // EIP-5792 wallet_sendCalls — TBD
-      } else {
+      } else if (token) {
         await writeContract.mutateAsync({
-          address: GASLITEDROP_CONTRACT_ADDRESS,
-          abi: GasliteDropAbi,
-          functionName: "airdropETH",
-          args: [addresses, amounts],
-          value: total,
+          address: BATCH_DISTRIBUTOR_CONTRACT_ADDRESS,
+          abi: BatchDistributorAbi,
+          functionName: "distributeToken",
+          args: [token.address, { txns: addresses.map((addr, i) => ({ recipient: addr, amount: amounts[i] })) }],
+          value: BATCH_DISTRIBUTOR_FEE,
+        });
+      } else {
+        const total = amounts.reduce((a, b) => a + b, BigInt(0));
+        await writeContract.mutateAsync({
+          address: BATCH_DISTRIBUTOR_CONTRACT_ADDRESS,
+          abi: BatchDistributorAbi,
+          functionName: "distributeEther",
+          args: [{ txns: addresses.map((addr, i) => ({ recipient: addr, amount: amounts[i] })) }],
+          value: total + BATCH_DISTRIBUTOR_FEE,
         });
       }
     } catch (e) {
@@ -100,24 +155,32 @@ export function BatchTextEditor({
     }
   };
 
+  const isBalanceLoading = token ? token.isLoading : isLoadingNativeBalance;
+  const isPending = writeContract.isPending || isConfirming;
+
   return (
     <div className="flex flex-col gap-3 mt-2">
       {/* balance + running total */}
       <div className="flex flex-col gap-1 text-sm items-end">
         <div className="flex flex-row gap-2 items-center">
           <Wallet className="w-4 h-4 text-muted-foreground" />
-          {isLoadingNativeBalance ? (
+          {isBalanceLoading ? (
             <Skeleton className="w-24 h-4" />
           ) : (
             <span>
-              {formatEther(nativeBalance?.value ?? BigInt(0))} {symbol}
+              {token
+                ? (token.balance !== undefined ? formatUnits(token.balance, token.decimals) : "—")
+                : formatEther(nativeBalance?.value ?? BigInt(0))}{" "}
+              {symbol}
             </span>
           )}
         </div>
         <div className="flex flex-row gap-2 items-center">
           <Sigma className="w-4 h-4 text-muted-foreground" />
           <span className={isOverBalance ? "text-red-400" : ""}>
-            {formatEther(totalAmount)} {symbol}
+            {token
+              ? `${formatAmount(totalAmount)} ${symbol}`
+              : `${formatEther(totalAmount + BATCH_DISTRIBUTOR_FEE)} ${symbol}`}
           </span>
         </div>
       </div>
@@ -134,7 +197,7 @@ export function BatchTextEditor({
             onChange={setText}
             extensions={[EditorView.lineWrapping]}
             theme={isDark ? githubDark : githubLight}
-            placeholder={"0xRecipient1,0.01\n0xRecipient2,0.05\n# comment"}
+            placeholder={token ? "0xRecipient1,100\n0xRecipient2,250\n# comment" : "0xRecipient1,0.01\n0xRecipient2,0.05\n# comment"}
             height="200px"
             className="rounded-none text-xs"
           />
@@ -157,41 +220,72 @@ export function BatchTextEditor({
           {isOverBalance && (
             <span className="text-red-400">Total amount exceeds balance</span>
           )}
+          {isOverNativeBalance && (
+            <span className="text-red-400">Insufficient ETH for fee</span>
+          )}
         </div>
       )}
 
       {/* actions */}
-      <div className="grid grid-cols-5 gap-2">
-        <Button
-          type="button"
-          variant="outline"
-          size="icon"
-          className="rounded-none hover:cursor-pointer col-span-1"
-          onClick={() => setText("")}
-        >
-          <Eraser className="w-4 h-4" />
-        </Button>
-        <Button
-          type="button"
-          variant="outline"
-          className="rounded-none hover:cursor-pointer col-span-2"
-          disabled={!canSubmit || writeContract.isPending || isConfirming}
-          onClick={() => setShowTxObject((prev) => !prev)}
-        >
-          Request
-        </Button>
-        <Button
-          type="button"
-          className="rounded-none hover:cursor-pointer col-span-2"
-          disabled={!canSubmit || writeContract.isPending || isConfirming}
-          onClick={handleSubmit}
-        >
-          {writeContract.isPending || isConfirming ? (
-            <Loader2 className="w-4 h-4 animate-spin" />
-          ) : (
-            "Send batch"
-          )}
-        </Button>
+      <div className="flex flex-col gap-2">
+        {token && needsApproval && (
+          <Button
+            type="button"
+            variant="outline"
+            className="rounded-none w-full hover:cursor-pointer"
+            disabled={approveWrite.isPending || isApproveConfirming}
+            onClick={async () => {
+              try {
+                await approveWrite.mutateAsync({
+                  address: token.address,
+                  abi: erc20Abi,
+                  functionName: "approve",
+                  args: [BATCH_DISTRIBUTOR_CONTRACT_ADDRESS as Address, totalAmount],
+                });
+              } catch {
+                // user rejected or tx failed — errors surfaced by wallet
+              }
+            }}
+          >
+            {approveWrite.isPending || isApproveConfirming ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              `Approve ${symbol}`
+            )}
+          </Button>
+        )}
+        <div className="grid grid-cols-5 gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="icon"
+            className="rounded-none hover:cursor-pointer col-span-1"
+            onClick={() => setText("")}
+          >
+            <Eraser className="w-4 h-4" />
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            className="rounded-none hover:cursor-pointer col-span-2"
+            disabled={!canSubmit || isPending}
+            onClick={() => setShowTxObject((prev) => !prev)}
+          >
+            Request
+          </Button>
+          <Button
+            type="button"
+            className="rounded-none hover:cursor-pointer col-span-2"
+            disabled={!canSubmit || needsApproval || isPending}
+            onClick={handleSubmit}
+          >
+            {isPending ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              "Send batch"
+            )}
+          </Button>
+        </div>
       </div>
 
       {showTxObject && (
@@ -208,6 +302,16 @@ export function BatchTextEditor({
           <AlertTitle>Error</AlertTitle>
           <AlertDescription>{submitError}</AlertDescription>
         </Alert>
+      )}
+
+      {token && (approveWrite.data || approveWrite.isPending || isApproveConfirming) && (
+        <TransactionStatus
+          isPending={approveWrite.isPending}
+          isConfirming={isApproveConfirming}
+          isConfirmed={isApproveConfirmed}
+          txHash={approveWrite.data}
+          blockExplorerUrl={blockExplorerUrl}
+        />
       )}
 
       <TransactionStatus
