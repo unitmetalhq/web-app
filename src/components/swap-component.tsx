@@ -10,11 +10,12 @@ import {
   ArrowUpDown,
   Eraser,
   RefreshCcw,
-  ChevronDown,
-  Quote
+  Quote,
+  Pencil,
 } from "lucide-react";
 import { type Address, erc20Abi, formatUnits, parseUnits, maxUint256 } from "viem";
 import { fetchZfiQuote, ZFI_ETH, type ZfiQuoteResponse } from "@/lib/swap-providers/zfi";
+import { defaultSlippage } from "@/lib/slippage";
 import {
   useReadContract,
   useBalance,
@@ -31,14 +32,7 @@ const ETH_ADDRESS = '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE' as const;
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { useDebounce } from "@/hooks/use-debounce";
 import { Skeleton } from "@/components/ui/skeleton";
-import {
-  Dialog,
-  DialogClose,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog";
+import { TokenPickerDialog, type TokenListToken } from "@/components/token-picker-dialog";
 import {
   Accordion,
   AccordionContent,
@@ -48,15 +42,6 @@ import {
 import { Kbd } from "@/components/ui/kbd";
 import { TransactionStatus } from "@/components/transaction-status";
 
-
-type TokenListToken = {
-  chainId: number;
-  address: `0x${string}`;
-  name: string;
-  symbol: string;
-  decimals: number;
-  logoURI?: string;
-};
 
 export default function SwapComponent() {
   return (
@@ -87,6 +72,12 @@ function SwapForm() {
     },
     staleTime: Infinity,
   });
+
+  const [slippage, setSlippage] = useState("0.1");
+  const [isEditingSlippage, setIsEditingSlippage] = useState(false);
+  // Tracks whether the user has manually set a slippage value. When true,
+  // automatic token-based defaults no longer override what they typed.
+  const [isSlippageUserSet, setIsSlippageUserSet] = useState(false);
 
   const effectiveChain = search.chain ?? connection.chain?.id ?? null;
   const tokens = effectiveChain
@@ -127,6 +118,17 @@ function SwapForm() {
     tokenOut?.toLowerCase() === ETH_ADDRESS.toLowerCase()
       ? 18
       : (tokenOutMeta?.decimals ?? 18);
+
+  // ── Default slippage from token symbols ──────────────────────────────────────
+  // Runs whenever tokenIn or tokenOut changes, but skips if the user has
+  // already set a custom value. Logic lives in @/lib/slippage.ts.
+  const symbolIn = tokenIn?.toLowerCase() === ETH_ADDRESS.toLowerCase() ? "ETH" : tokenInMeta?.symbol;
+  const symbolOut = tokenOut?.toLowerCase() === ETH_ADDRESS.toLowerCase() ? "ETH" : tokenOutMeta?.symbol;
+
+  useEffect(() => {
+    if (isSlippageUserSet) return;
+    setSlippage(defaultSlippage(symbolIn, symbolOut));
+  }, [symbolIn, symbolOut, isSlippageUserSet]);
 
   let parsedAmountIn: bigint | undefined;
   try {
@@ -650,7 +652,38 @@ function SwapForm() {
           </div>
           <div className="flex flex-row items-center justify-between text-xs">
             <p className="text-muted-foreground">Max slippage</p>
-            <p>0.1%</p>
+            <div className="flex items-center gap-1">
+              {/* preset buttons */}
+              {(["0.1", "0.5", "1"] as const).map((preset) => (
+                <button
+                  key={preset}
+                  type="button"
+                  onClick={() => { setSlippage(preset); setIsSlippageUserSet(true); setIsEditingSlippage(false); }}
+                  className={`px-1.5 py-0.5 border text-xs hover:cursor-pointer hover:bg-accent transition-colors ${slippage === preset && !isEditingSlippage ? "border-primary text-primary" : "border-input text-muted-foreground"}`}
+                >
+                  {preset}%
+                </button>
+              ))}
+              {/* editable value — readOnly when not editing */}
+              <input
+                type="number"
+                inputMode="decimal"
+                value={slippage}
+                readOnly={!isEditingSlippage}
+                onChange={(e) => { setSlippage(e.target.value); setIsSlippageUserSet(true); }}
+                onBlur={() => setIsEditingSlippage(false)}
+                className="w-12 border border-input bg-transparent px-1.5 py-0.5 text-xs text-right outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none focus:border-primary"
+              />
+              <span className="text-muted-foreground">%</span>
+              {/* toggle edit mode */}
+              <button
+                type="button"
+                onClick={() => setIsEditingSlippage((prev) => !prev)}
+                className={`hover:cursor-pointer transition-colors ${isEditingSlippage ? "text-primary" : "text-muted-foreground hover:text-foreground"}`}
+              >
+                <Pencil className="w-3 h-3" />
+              </button>
+            </div>
           </div>
           <div className="flex flex-row items-center justify-between text-xs">
             <p className="text-muted-foreground">Fee</p>
@@ -702,26 +735,35 @@ function SwapForm() {
 
               if (isNativeTokenIn || supportsAtomicBatch) {
                 return (
-                  <Button
-                    className="hover:cursor-pointer rounded-none w-full"
-                    type="button"
-                    onClick={handleSwap}
-                    disabled={!canSwap}
-                  >
-                    {isSwapping && <Loader2 className="w-4 h-4 animate-spin" />}
-                    Swap
-                  </Button>
+                  <div className="flex flex-col gap-2">
+                    <Button
+                      className="hover:cursor-pointer rounded-none w-full"
+                      type="button"
+                      onClick={handleSwap}
+                      disabled={!canSwap}
+                    >
+                      {isSwapping && <Loader2 className="w-4 h-4 animate-spin" />}
+                      SWAP <Kbd>S</Kbd>
+                    </Button>
+                    <TransactionStatus
+                      isPending={isSwapPending}
+                      isConfirming={isSwapConfirming}
+                      isConfirmed={isSwapConfirmed}
+                      txHash={swapTxHash}
+                      blockExplorerUrl={connection.chain?.blockExplorers?.default.url}
+                    />
+                  </div>
                 );
               }
 
               return (
                 <div className="flex flex-col gap-4">
-                  {/* approve row */}
-                  <div className="flex flex-col gap-2">
-                    <div className="flex flex-row items-center gap-4">
-                      <span className={`w-5 h-5 shrink-0 border text-xs flex items-center justify-center ${isAllowanceSufficient ? "border-green-500 text-green-500" : "border-muted-foreground text-muted-foreground"}`}>
-                        1
-                      </span>
+                  {/* step 1 — approve */}
+                  <div className="grid grid-cols-[1.25rem_1fr] gap-x-4 gap-y-2 items-start">
+                    <span className={`w-5 h-5 shrink-0 border text-xs flex items-center justify-center mt-0.5 ${isAllowanceSufficient ? "border-green-500 text-green-500" : "border-muted-foreground text-muted-foreground"}`}>
+                      1
+                    </span>
+                    <div className="flex flex-row gap-2">
                       <Button
                         className="hover:cursor-pointer rounded-none flex-1"
                         variant="outline"
@@ -743,7 +785,8 @@ function SwapForm() {
                       </Button>
                     </div>
                     {(isApprovePending || isApproveConfirming || isApproveConfirmed || !!approveTxHash) && (
-                      <div className="ml-9">
+                      <>
+                        <div />
                         <TransactionStatus
                           isPending={isApprovePending}
                           isConfirming={isApproveConfirming}
@@ -751,13 +794,13 @@ function SwapForm() {
                           txHash={approveTxHash}
                           blockExplorerUrl={connection.chain?.blockExplorers?.default.url}
                         />
-                      </div>
+                      </>
                     )}
                   </div>
 
-                  {/* swap row */}
-                  <div className="flex flex-row items-center gap-4">
-                    <span className={`w-5 h-5 shrink-0 border text-xs flex items-center justify-center ${isAllowanceSufficient ? "border-foreground text-foreground" : "border-muted-foreground text-muted-foreground"}`}>
+                  {/* step 2 — swap */}
+                  <div className="grid grid-cols-[1.25rem_1fr] gap-x-4 gap-y-2 items-start">
+                    <span className={`w-5 h-5 shrink-0 border text-xs flex items-center justify-center mt-0.5 ${isAllowanceSufficient ? "border-foreground text-foreground" : "border-muted-foreground text-muted-foreground"}`}>
                       2
                     </span>
                     <Button
@@ -769,24 +812,19 @@ function SwapForm() {
                       {isSwapping && <Loader2 className="w-4 h-4 animate-spin" />}
                       SWAP <Kbd>S</Kbd>
                     </Button>
+                    <div />
+                    <TransactionStatus
+                      isPending={isSwapPending}
+                      isConfirming={isSwapConfirming}
+                      isConfirmed={isSwapConfirmed}
+                      txHash={swapTxHash}
+                      blockExplorerUrl={connection.chain?.blockExplorers?.default.url}
+                    />
                   </div>
                 </div>
               );
             }}
           </form.Subscribe>
-
-          {/* tx status */}
-          {(isSwapPending || isSwapConfirming || isSwapConfirmed || !!swapTxHash) && (
-            <div className="ml-9">
-              <TransactionStatus
-                isPending={isSwapPending}
-                isConfirming={isSwapConfirming}
-                isConfirmed={isSwapConfirmed}
-                txHash={swapTxHash}
-                blockExplorerUrl={connection.chain?.blockExplorers?.default.url}
-              />
-            </div>
-          )}
         </div>
       </div>
     </form>
@@ -961,86 +999,6 @@ function TokenBalanceRow({
   );
 }
 
-function TokenPickerDialog({
-  tokens,
-  value,
-  onSelect,
-  disabledAddress,
-  isLoading,
-}: {
-  tokens: TokenListToken[];
-  value: string;
-  onSelect: (address: string) => void;
-  disabledAddress?: string;
-  isLoading?: boolean;
-}) {
-  const [search, setSearch] = useState("");
-
-  const selected = tokens.find((t) => t.address === value);
-  const filtered = tokens.filter(
-    (t) =>
-      t.symbol.toLowerCase().includes(search.toLowerCase()) ||
-      t.name.toLowerCase().includes(search.toLowerCase())
-  );
-
-  return (
-    <Dialog onOpenChange={(open) => { if (!open) setSearch(""); }}>
-      <DialogTrigger
-        disabled={isLoading}
-        render={
-          <button
-            type="button"
-            className="flex items-center gap-1 shrink-0 border border-input px-2.5 py-1.5 text-xs hover:cursor-pointer hover:bg-accent transition-colors whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed"
-          />
-        }
-      >
-        {isLoading ? (
-          <Loader2 className="w-3 h-3 animate-spin text-muted-foreground" />
-        ) : (
-          <>
-            <span>{selected ? selected.symbol : "Select"}</span>
-            <ChevronDown className="w-3 h-3 text-muted-foreground" />
-          </>
-        )}
-      </DialogTrigger>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Select token</DialogTitle>
-        </DialogHeader>
-        <input
-          autoFocus
-          type="text"
-          placeholder="Search by name or symbol..."
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="w-full border border-input bg-transparent px-2.5 py-2 text-xs outline-none placeholder:text-muted-foreground"
-        />
-        <div className="flex flex-col max-h-64 overflow-y-auto">
-          {filtered.length === 0 ? (
-            <p className="px-2.5 py-2 text-xs text-muted-foreground">No tokens found</p>
-          ) : (
-            filtered.map((token) => (
-              <DialogClose
-                key={token.address}
-                disabled={token.address === disabledAddress}
-                render={
-                  <button
-                    type="button"
-                    onClick={() => onSelect(token.address)}
-                    className="flex items-center justify-between px-2.5 py-2 text-xs text-left hover:bg-accent transition-colors disabled:opacity-40 disabled:cursor-not-allowed hover:cursor-pointer"
-                  />
-                }
-              >
-                <span className="font-medium">{token.symbol}</span>
-                <span className="text-muted-foreground">{token.name}</span>
-              </DialogClose>
-            ))
-          )}
-        </div>
-      </DialogContent>
-    </Dialog>
-  );
-}
 
 // function TokenFieldInfo({ field }: { field: AnyFieldApi }) {
 //   return (

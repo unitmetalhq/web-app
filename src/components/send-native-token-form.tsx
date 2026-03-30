@@ -597,7 +597,7 @@ function ReceivingAddressFieldInfo({
       ) : ensAddress === null ? (
         <div className="text-red-400 text-xs">Invalid ENS</div>
       ) : (
-        <em className="text-green-500">ok! Click icon to look up ENS</em>
+        <em className="text-green-500">ok!</em>
       )}
       {field.state.meta.isValidating ? "Validating..." : null}
     </>

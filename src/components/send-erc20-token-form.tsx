@@ -13,6 +13,7 @@ import {
   useConnection,
   useSimulateContract,
 } from "wagmi";
+import { useQuery } from "@tanstack/react-query";
 import { normalize } from "viem/ens";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -26,6 +27,7 @@ import { RefreshCcw } from "lucide-react";
 import { TransactionObject } from "@/components/transaction-object";
 import { TransactionStatus } from "@/components/transaction-status";
 import { Kbd } from "@/components/ui/kbd";
+import { TokenPickerDialog, type TokenListToken } from "@/components/token-picker-dialog";
 
 export default function SendErc20TokenForm({
   selectedChain,
@@ -258,6 +260,23 @@ export default function SendErc20TokenForm({
     refetchTokenData();
   }, [selectedChain, resetSendErc20Transaction, form, refetchTokenData]);
 
+  // Token list — fetched once, cached indefinitely, filtered to selected chain.
+  // Excludes the native ETH sentinel address since ETH has its own send tab.
+  const ETH_ADDRESS = "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE";
+  const { data: tokenListData, isLoading: isLoadingTokenList } = useQuery({
+    queryKey: ["token-list"],
+    queryFn: async () => {
+      const res = await fetch("/token-list.json");
+      if (!res.ok) throw new Error("Failed to fetch token list");
+      return res.json() as Promise<{ tokens: TokenListToken[] }>;
+    },
+    staleTime: Infinity,
+  });
+  const tokensForChain = (tokenListData?.tokens ?? []).filter(
+    (t) => (selectedChain === null || t.chainId === selectedChain)
+      && t.address.toLowerCase() !== ETH_ADDRESS.toLowerCase()
+  );
+
   return (
     <form
       onSubmit={(e) => {
@@ -285,32 +304,41 @@ export default function SendErc20TokenForm({
                 <div className="flex flex-row gap-2 items-center">
                   <p className="text-muted-foreground">Token</p>
                 </div>
-                <InputGroup>
-                  <InputGroupInput
-                    id={field.name}
-                    name={field.name}
-                    value={field.state.value || ""}
-                    onChange={(e) => field.handleChange(e.target.value)}
-                    className="rounded-none"
-                    type="text"
-                    placeholder="Address (0x...) or ENS (.eth)"
-                    required
+                {/* grid: [dialog picker | address input] */}
+                <div className="grid grid-cols-[auto_1fr] gap-2 items-start">
+                  <TokenPickerDialog
+                    tokens={tokensForChain}
+                    value={field.state.value}
+                    onSelect={(address) => field.handleChange(address)}
+                    isLoading={isLoadingTokenList}
                   />
-                  <InputGroupAddon align="inline-end">
-                    <InputGroupButton
-                      aria-label="ENS lookup"
-                      size="icon-xs"
-                      onClick={() => refetchTokenEnsAddress()}
-                      className="hover:cursor-pointer"
-                    >
-                      {isLoadingTokenEnsAddress ? (
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                      ) : (
-                        <Search />
-                      )}
-                    </InputGroupButton>
-                  </InputGroupAddon>
-                </InputGroup>
+                  <InputGroup>
+                    <InputGroupInput
+                      id={field.name}
+                      name={field.name}
+                      value={field.state.value || ""}
+                      onChange={(e) => field.handleChange(e.target.value)}
+                      className="rounded-none"
+                      type="text"
+                      placeholder="Address (0x...) or ENS (.eth)"
+                      required
+                    />
+                    <InputGroupAddon align="inline-end">
+                      <InputGroupButton
+                        aria-label="ENS lookup"
+                        size="icon-xs"
+                        onClick={() => refetchTokenEnsAddress()}
+                        className="hover:cursor-pointer"
+                      >
+                        {isLoadingTokenEnsAddress ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <Search />
+                        )}
+                      </InputGroupButton>
+                    </InputGroupAddon>
+                  </InputGroup>
+                </div>
                 <TokenAddressFieldInfo
                   field={field}
                   ensAddress={tokenEnsAddress}
@@ -668,7 +696,7 @@ function TokenAddressFieldInfo({
       ) : ensAddress === null ? (
         <div className="text-red-400 text-xs">Invalid ENS</div>
       ) : (
-        <em className="text-green-500">ok! Click icon to look up ENS</em>
+        <em className="text-green-500">ok!</em>
       )}
       {field.state.meta.isValidating ? "Validating..." : null}
     </>
@@ -734,7 +762,7 @@ function ReceivingAddressFieldInfo({
       ) : ensAddress === null ? (
         <div className="text-red-400 text-xs">Invalid ENS</div>
       ) : (
-        <em className="text-green-500">ok! Click icon to look up ENS</em>
+        <em className="text-green-500">ok!</em>
       )}
       {field.state.meta.isValidating ? "Validating..." : null}
     </>
