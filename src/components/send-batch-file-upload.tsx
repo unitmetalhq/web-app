@@ -1,14 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Loader2, Wallet, Sigma, Eraser, Upload, FileText, X } from "lucide-react";
-import { parseEther, formatEther, parseUnits, formatUnits, erc20Abi, type Address } from "viem";
+import { Loader2, Eraser, Upload, FileText, X } from "lucide-react";
+import { parseEther, formatEther, parseUnits, formatUnits, erc20Abi, erc721Abi, type Address } from "viem";
 import { useWriteContract, useWaitForTransactionReceipt, useConfig, useSimulateContract, useReadContract, useConnection } from "wagmi";
 import { BATCH_DISTRIBUTOR_CONTRACT_ADDRESS, BATCH_DISTRIBUTOR_FEE } from "@/lib/constants";
 import { BatchDistributorAbi } from "@/lib/abis/batch-distributor-abi";
 import { TransactionStatus } from "@/components/transaction-status";
 import { TransactionObject } from "@/components/transaction-object";
-import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
-import { AlertCircle } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { parseRecipients, type BatchEditorProps } from "@/lib/send-batch-utils";
 
@@ -21,6 +19,8 @@ export function BatchFileUpload({
   atomicBatchSupported,
   selectedChain,
   token,
+  isApprovedForAll,
+  onApproveSuccess,
 }: BatchEditorProps) {
   const config = useConfig();
   const connection = useConnection();
@@ -39,19 +39,22 @@ export function BatchFileUpload({
   const [showTxObject, setShowTxObject] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  const isNft = token?.isNft ?? false;
   const symbol = token ? token.symbol : (nativeBalance?.symbol ?? "ETH");
 
   const parseAmount = (amount: string): bigint => {
+    if (isNft) return BigInt(amount);
     if (token) return parseUnits(amount, token.decimals);
     return parseEther(amount);
   };
 
   const formatAmount = (amount: bigint): string => {
+    if (isNft) return amount.toString();
     if (token) return formatUnits(amount, token.decimals);
     return formatEther(amount);
   };
 
-  const parsed = useMemo(() => (fileText !== null ? parseRecipients(fileText) : null), [fileText]);
+  const parsed = useMemo(() => (fileText !== null ? parseRecipients(fileText, isNft) : null), [fileText, isNft]);
 
   let totalAmount = BigInt(0);
   for (const r of parsed?.valid ?? []) {
@@ -62,30 +65,34 @@ export function BatchFileUpload({
     }
   }
 
-  // ERC20 allowance check
+  // ERC20 allowance check (skipped for NFTs)
   const { data: allowance, refetch: refetchAllowance } = useReadContract({
     address: token?.address,
     abi: erc20Abi,
     functionName: "allowance",
     args: [connection.address!, BATCH_DISTRIBUTOR_CONTRACT_ADDRESS as Address],
-    query: { enabled: !!token && !!connection.address },
+    query: { enabled: !!token && !isNft && !!connection.address },
   });
 
   useEffect(() => {
-    if (isApproveConfirmed) void refetchAllowance();
-  }, [isApproveConfirmed, refetchAllowance]);
+    if (isApproveConfirmed) {
+      if (isNft) onApproveSuccess?.();
+      else void refetchAllowance();
+    }
+  }, [isApproveConfirmed, isNft, refetchAllowance, onApproveSuccess]);
 
-  const needsApproval = !!token && allowance !== undefined && totalAmount > 0n && allowance < totalAmount;
+  const needsApproval = !isNft && !!token && allowance !== undefined && totalAmount > 0n && allowance < totalAmount;
 
   // Balance checks
-  const isOverBalance = token
+  const isOverBalance = isNft
+    ? false
+    : token
     ? (token.balance !== undefined && totalAmount > token.balance)
     : (nativeBalance ? totalAmount + BATCH_DISTRIBUTOR_FEE > nativeBalance.value : false);
-  const isOverNativeBalance = token
-    ? (nativeBalance ? BATCH_DISTRIBUTOR_FEE > nativeBalance.value : false)
-    : false;
+  const isOverNativeBalance = nativeBalance ? BATCH_DISTRIBUTOR_FEE > nativeBalance.value : false;
 
-  const canSubmit = (parsed?.valid.length ?? 0) > 0 && (parsed?.errors.length ?? 1) === 0 && !isOverBalance && !isOverNativeBalance;
+  const canSubmit = (parsed?.valid.length ?? 0) > 0 && (parsed?.errors.length ?? 1) === 0 && !isOverBalance && !isOverNativeBalance
+    && (!isNft || (isApprovedForAll ?? false));
 
   const simulatedAddresses = (parsed?.valid ?? []).map((r) => r.address);
   const simulatedAmounts = (parsed?.valid ?? []).map((r) => {
@@ -96,19 +103,29 @@ export function BatchFileUpload({
     }
   });
 
+  const simulateEnabled = showTxObject && simulatedAddresses.length > 0;
   const {
     data: simulatedTx,
     isLoading: isLoadingSimulate,
     isError: isErrorSimulate,
   } = useSimulateContract(
-    token
+    isNft && token
+      ? {
+          address: BATCH_DISTRIBUTOR_CONTRACT_ADDRESS,
+          abi: BatchDistributorAbi,
+          functionName: "distributeNft",
+          args: [token.address, { txns: simulatedAddresses.map((addr, i) => ({ recipient: addr, amount: simulatedAmounts[i] })) }],
+          value: BATCH_DISTRIBUTOR_FEE,
+          query: { enabled: simulateEnabled },
+        }
+      : token
       ? {
           address: BATCH_DISTRIBUTOR_CONTRACT_ADDRESS,
           abi: BatchDistributorAbi,
           functionName: "distributeToken",
           args: [token.address, { txns: simulatedAddresses.map((addr, i) => ({ recipient: addr, amount: simulatedAmounts[i] })) }],
           value: BATCH_DISTRIBUTOR_FEE,
-          query: { enabled: showTxObject && simulatedAddresses.length > 0 && totalAmount > 0n && !needsApproval },
+          query: { enabled: simulateEnabled && totalAmount > 0n && !needsApproval },
         }
       : {
           address: BATCH_DISTRIBUTOR_CONTRACT_ADDRESS,
@@ -116,7 +133,7 @@ export function BatchFileUpload({
           functionName: "distributeEther",
           args: [{ txns: simulatedAddresses.map((addr, i) => ({ recipient: addr, amount: simulatedAmounts[i] })) }],
           value: totalAmount + BATCH_DISTRIBUTOR_FEE,
-          query: { enabled: showTxObject && simulatedAddresses.length > 0 && totalAmount > BigInt(0) },
+          query: { enabled: simulateEnabled && totalAmount > 0n },
         }
   );
 
@@ -161,6 +178,14 @@ export function BatchFileUpload({
 
       if (atomicBatchSupported) {
         // EIP-5792 wallet_sendCalls — TBD
+      } else if (isNft && token) {
+        await writeContract.mutateAsync({
+          address: BATCH_DISTRIBUTOR_CONTRACT_ADDRESS,
+          abi: BatchDistributorAbi,
+          functionName: "distributeNft",
+          args: [token.address, { txns: addresses.map((addr, i) => ({ recipient: addr, amount: amounts[i] })) }],
+          value: BATCH_DISTRIBUTOR_FEE,
+        });
       } else if (token) {
         await writeContract.mutateAsync({
           address: BATCH_DISTRIBUTOR_CONTRACT_ADDRESS,
@@ -186,35 +211,14 @@ export function BatchFileUpload({
 
   const isBalanceLoading = token ? token.isLoading : isLoadingNativeBalance;
   const isPending = writeContract.isPending || isConfirming;
-  const sampleCsv = token ? `0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045,100\n0x91ab3daa9086D719Ebf8c96Ea6Ca3d94e9dF2b8A,250` : BATCH_SAMPLE_CSV;
+  const sampleCsv = isNft
+    ? `0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045,42\n0x91ab3daa9086D719Ebf8c96Ea6Ca3d94e9dF2b8A,137`
+    : token
+    ? `0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045,100\n0x91ab3daa9086D719Ebf8c96Ea6Ca3d94e9dF2b8A,250`
+    : BATCH_SAMPLE_CSV;
 
   return (
     <div className="flex flex-col gap-3 mt-2">
-      {/* balance + running total */}
-      <div className="flex flex-col gap-1 text-sm items-end">
-        <div className="flex flex-row gap-2 items-center">
-          <Wallet className="w-4 h-4 text-muted-foreground" />
-          {isBalanceLoading ? (
-            <Skeleton className="w-24 h-4" />
-          ) : (
-            <span>
-              {token
-                ? (token.balance !== undefined ? formatUnits(token.balance, token.decimals) : "—")
-                : formatEther(nativeBalance?.value ?? BigInt(0))}{" "}
-              {symbol}
-            </span>
-          )}
-        </div>
-        <div className="flex flex-row gap-2 items-center">
-          <Sigma className="w-4 h-4 text-muted-foreground" />
-          <span className={isOverBalance ? "text-red-400" : ""}>
-            {token
-              ? `${formatAmount(totalAmount)} ${symbol}`
-              : `${formatEther(totalAmount + BATCH_DISTRIBUTOR_FEE)} ${symbol}`}
-          </span>
-        </div>
-      </div>
-
       {/* sample format */}
       <div className="flex flex-col gap-1 border p-3">
         <p className="text-xs font-medium text-muted-foreground flex items-center gap-1.5">
@@ -222,7 +226,7 @@ export function BatchFileUpload({
           Sample CSV format
         </p>
         <p className="text-xs text-muted-foreground mt-0.5">
-          No header row. One recipient per line: <code>address,amount</code>
+          No header row. One recipient per line: <code>{isNft ? "address,tokenId" : "address,amount"}</code>
         </p>
         <pre className="text-xs bg-muted/50 p-2 mt-1 overflow-x-auto leading-5">{sampleCsv}</pre>
         <button
@@ -313,9 +317,65 @@ export function BatchFileUpload({
         </div>
       )}
 
+      {/* ── Send Batch Info ───────────────────────────────── */}
+      <div className="flex flex-col gap-2 border-t border-border pt-2">
+        <div className="flex flex-row items-center justify-between">
+          <Button
+            type="button"
+            variant="outline"
+            className="rounded-none hover:cursor-pointer w-fit"
+            disabled={fileText === null}
+            onClick={handleClear}
+          >
+            <Eraser className="w-4 h-4" />
+            Reset
+          </Button>
+        </div>
+        {/* balance */}
+        <div className="flex flex-row items-center justify-between text-xs">
+          <p className="text-muted-foreground">Balance</p>
+          {isBalanceLoading ? (
+            <Skeleton className="w-24 h-4" />
+          ) : isNft ? (
+            <span className={isOverNativeBalance ? "text-red-400" : ""}>
+              {formatEther(nativeBalance?.value ?? BigInt(0))} {nativeBalance?.symbol ?? "ETH"}
+            </span>
+          ) : (
+            <span>
+              {token
+                ? (token.balance !== undefined ? formatUnits(token.balance, token.decimals) : "—")
+                : formatEther(nativeBalance?.value ?? BigInt(0))}{" "}
+              {symbol}
+            </span>
+          )}
+        </div>
+        {/* Batch */}
+        <div className="flex flex-row items-center justify-between text-xs">
+          <p className="text-muted-foreground">Batch</p>
+          {isNft
+            ? <p>{parsed?.valid.length ?? 0} {symbol}</p>
+            : <p>{formatAmount(totalAmount)} {symbol}</p>
+          }
+        </div>
+        {/* fee */}
+        <div className="flex flex-row items-center justify-between text-xs">
+          <p className="text-muted-foreground">Fee</p>
+          <p>{formatEther(BATCH_DISTRIBUTOR_FEE)} {nativeBalance?.symbol ?? "ETH"}</p>
+        </div>
+        {/* total (only for native) */}
+        {!token && (
+          <div className="flex flex-row gap-2 items-center justify-between text-xs">
+            <p className="text-muted-foreground">Total</p>
+            <div className={isOverBalance ? "text-red-400" : ""}>
+              {formatEther(totalAmount + BATCH_DISTRIBUTOR_FEE)} {symbol}
+            </div>
+          </div>
+        )}
+      </div>
+
       {/* actions */}
       <div className="flex flex-col gap-2">
-        {token && needsApproval && (
+        {token && (isNft ? !(isApprovedForAll ?? false) : needsApproval) && (
           <Button
             type="button"
             variant="outline"
@@ -323,12 +383,21 @@ export function BatchFileUpload({
             disabled={approveWrite.isPending || isApproveConfirming}
             onClick={async () => {
               try {
-                await approveWrite.mutateAsync({
-                  address: token.address,
-                  abi: erc20Abi,
-                  functionName: "approve",
-                  args: [BATCH_DISTRIBUTOR_CONTRACT_ADDRESS as Address, totalAmount],
-                });
+                if (isNft) {
+                  await approveWrite.mutateAsync({
+                    address: token.address,
+                    abi: erc721Abi,
+                    functionName: "setApprovalForAll",
+                    args: [BATCH_DISTRIBUTOR_CONTRACT_ADDRESS as Address, true],
+                  });
+                } else {
+                  await approveWrite.mutateAsync({
+                    address: token.address,
+                    abi: erc20Abi,
+                    functionName: "approve",
+                    args: [BATCH_DISTRIBUTOR_CONTRACT_ADDRESS as Address, totalAmount],
+                  });
+                }
               } catch {
                 // user rejected or tx failed — errors surfaced by wallet
               }
@@ -336,26 +405,18 @@ export function BatchFileUpload({
           >
             {approveWrite.isPending || isApproveConfirming ? (
               <Loader2 className="w-4 h-4 animate-spin" />
+            ) : isNft ? (
+              `Approve for all`
             ) : (
               `Approve ${symbol}`
             )}
           </Button>
         )}
-        <div className="grid grid-cols-5 gap-2">
+        <div className="grid grid-cols-2 gap-2">
           <Button
             type="button"
             variant="outline"
-            size="icon"
-            className="rounded-none hover:cursor-pointer col-span-1"
-            onClick={handleClear}
-            disabled={fileText === null}
-          >
-            <Eraser className="w-4 h-4" />
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            className="rounded-none hover:cursor-pointer col-span-2"
+            className="rounded-none hover:cursor-pointer"
             disabled={!canSubmit || isPending}
             onClick={() => setShowTxObject((prev) => !prev)}
           >
@@ -363,15 +424,11 @@ export function BatchFileUpload({
           </Button>
           <Button
             type="button"
-            className="rounded-none hover:cursor-pointer col-span-2"
-            disabled={!canSubmit || needsApproval || isPending}
+            className="rounded-none hover:cursor-pointer"
+            disabled={!canSubmit || (!isNft && needsApproval) || isPending}
             onClick={handleSubmit}
           >
-            {isPending ? (
-              <Loader2 className="w-4 h-4 animate-spin" />
-            ) : (
-              "Send batch"
-            )}
+            {isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : "Send batch"}
           </Button>
         </div>
       </div>
@@ -382,14 +439,6 @@ export function BatchFileUpload({
           isLoading={isLoadingSimulate}
           isError={isErrorSimulate}
         />
-      )}
-
-      {submitError && (
-        <Alert variant="destructive">
-          <AlertCircle />
-          <AlertTitle>Error</AlertTitle>
-          <AlertDescription>{submitError}</AlertDescription>
-        </Alert>
       )}
 
       {token && (approveWrite.data || approveWrite.isPending || isApproveConfirming) && (
@@ -408,6 +457,8 @@ export function BatchFileUpload({
         isConfirmed={isConfirmed}
         txHash={writeContract.data}
         blockExplorerUrl={blockExplorerUrl}
+        error={submitError}
+        onClearError={() => setSubmitError(null)}
       />
     </div>
   );

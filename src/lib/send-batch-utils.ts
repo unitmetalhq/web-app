@@ -6,7 +6,7 @@ export type { BatchEditorProps, BatchTokenProps } from "@/types/send-batch";
 
 // ── parseRecipients ───────────────────────────────────────────────────────────
 
-export function parseRecipients(text: string): ParseResult {
+export function parseRecipients(text: string, isNft = false): ParseResult {
   const valid: ParsedRecipient[] = [];
   const errors: ParseError[] = [];
 
@@ -16,7 +16,7 @@ export function parseRecipients(text: string): ParseResult {
 
     const commaIdx = line.indexOf(",");
     if (commaIdx === -1) {
-      errors.push({ line: i + 1, text: line, reason: "Expected address,amount" });
+      errors.push({ line: i + 1, text: line, reason: isNft ? "Expected address,tokenId" : "Expected address,amount" });
       return;
     }
 
@@ -28,17 +28,29 @@ export function parseRecipients(text: string): ParseResult {
       return;
     }
 
-    const n = parseFloat(amount);
-    if (!amount || isNaN(n) || n <= 0) {
-      errors.push({ line: i + 1, text: line, reason: "Invalid amount" });
-      return;
-    }
-
-    try {
-      parseEther(amount);
-    } catch {
-      errors.push({ line: i + 1, text: line, reason: "Invalid amount format" });
-      return;
+    if (isNft) {
+      if (!amount || !/^\d+$/.test(amount)) {
+        errors.push({ line: i + 1, text: line, reason: "Token ID must be a non-negative integer" });
+        return;
+      }
+      try {
+        BigInt(amount);
+      } catch {
+        errors.push({ line: i + 1, text: line, reason: "Invalid token ID" });
+        return;
+      }
+    } else {
+      const n = parseFloat(amount);
+      if (!amount || isNaN(n) || n <= 0) {
+        errors.push({ line: i + 1, text: line, reason: "Invalid amount" });
+        return;
+      }
+      try {
+        parseEther(amount);
+      } catch {
+        errors.push({ line: i + 1, text: line, reason: "Invalid amount format" });
+        return;
+      }
     }
 
     valid.push({ address: address as Address, amount });

@@ -4,7 +4,7 @@ import { Input } from "@/components/ui/input";
 import { useForm, useStore } from "@tanstack/react-form";
 import type { AnyFieldApi } from "@tanstack/react-form";
 import { Loader2, Search, Plus, X, Eraser } from "lucide-react";
-import { parseEther, formatEther, parseUnits, formatUnits, erc20Abi, maxUint256, type Address } from "viem";
+import { parseEther, formatEther, parseUnits, formatUnits, erc20Abi, erc721Abi, maxUint256, type Address } from "viem";
 import { useEnsAddress, useWriteContract, useWaitForTransactionReceipt, useConfig, useSimulateContract, useReadContract, useConnection } from "wagmi";
 import { BATCH_DISTRIBUTOR_CONTRACT_ADDRESS, BATCH_DISTRIBUTOR_FEE } from "@/lib/constants";
 import { BatchDistributorAbi } from "@/lib/abis/batch-distributor-abi";
@@ -30,6 +30,8 @@ export function BatchSimpleEditor({
   atomicBatchSupported,
   selectedChain,
   token,
+  isApprovedForAll,
+  onApproveSuccess,
 }: BatchEditorProps) {
   const config = useConfig();
   const connection = useConnection();
@@ -44,14 +46,17 @@ export function BatchSimpleEditor({
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [showTxObject, setShowTxObject] = useState(false);
 
+  const isNft = token?.isNft ?? false;
   const symbol = token ? token.symbol : (nativeBalance?.symbol ?? "ETH");
 
   const parseAmount = (amount: string): bigint => {
+    if (isNft) return BigInt(amount);
     if (token) return parseUnits(amount, token.decimals);
     return parseEther(amount);
   };
 
   const formatAmount = (amount: bigint): string => {
+    if (isNft) return amount.toString();
     if (token) return formatUnits(amount, token.decimals);
     return formatEther(amount);
   };
@@ -68,6 +73,14 @@ export function BatchSimpleEditor({
 
         if (atomicBatchSupported) {
           // EIP-5792 wallet_sendCalls — TBD
+        } else if (isNft && token) {
+          await writeContract.mutateAsync({
+            address: BATCH_DISTRIBUTOR_CONTRACT_ADDRESS,
+            abi: BatchDistributorAbi,
+            functionName: "distributeNft",
+            args: [token.address, { txns: addresses.map((addr, i) => ({ recipient: addr, amount: amounts[i] })) }],
+            value: BATCH_DISTRIBUTOR_FEE,
+          });
         } else if (token) {
           await writeContract.mutateAsync({
             address: BATCH_DISTRIBUTOR_CONTRACT_ADDRESS,
@@ -115,28 +128,31 @@ export function BatchSimpleEditor({
     }
   }
 
-  // ERC20 allowance check
+  // ERC20 allowance check (skipped for NFTs — approval is handled by parent)
   const { data: allowance, refetch: refetchAllowance } = useReadContract({
     address: token?.address,
     abi: erc20Abi,
     functionName: "allowance",
     args: [connection.address!, BATCH_DISTRIBUTOR_CONTRACT_ADDRESS as Address],
-    query: { enabled: !!token && !!connection.address },
+    query: { enabled: !!token && !isNft && !!connection.address },
   });
 
   useEffect(() => {
-    if (isApproveConfirmed) void refetchAllowance();
-  }, [isApproveConfirmed, refetchAllowance]);
+    if (isApproveConfirmed) {
+      if (isNft) onApproveSuccess?.();
+      else void refetchAllowance();
+    }
+  }, [isApproveConfirmed, isNft, refetchAllowance, onApproveSuccess]);
 
-  const needsApproval = !!token && allowance !== undefined && totalAmount > 0n && allowance < totalAmount;
+  const needsApproval = !isNft && !!token && allowance !== undefined && totalAmount > 0n && allowance < totalAmount;
 
   // Balance checks
-  const isOverBalance = token
+  const isOverBalance = isNft
+    ? false
+    : token
     ? (token.balance !== undefined && totalAmount > token.balance)
     : (nativeBalance ? totalAmount + BATCH_DISTRIBUTOR_FEE > nativeBalance.value : false);
-  const isOverNativeBalance = token
-    ? (nativeBalance ? BATCH_DISTRIBUTOR_FEE > nativeBalance.value : false)
-    : false;
+  const isOverNativeBalance = nativeBalance ? BATCH_DISTRIBUTOR_FEE > nativeBalance.value : false;
 
   // Simulate
   const simulatedAddresses = recipients.map((r) => r.address as Address);
@@ -148,19 +164,29 @@ export function BatchSimpleEditor({
     }
   });
 
+  const simulateEnabled = showTxObject && simulatedAddresses.every((a) => !!a) && simulatedAmounts.length > 0;
   const {
     data: simulatedTx,
     isLoading: isLoadingSimulate,
     isError: isErrorSimulate,
   } = useSimulateContract(
-    token
+    isNft && token
+      ? {
+        address: BATCH_DISTRIBUTOR_CONTRACT_ADDRESS,
+        abi: BatchDistributorAbi,
+        functionName: "distributeNft",
+        args: [token.address, { txns: simulatedAddresses.map((addr, i) => ({ recipient: addr, amount: simulatedAmounts[i] })) }],
+        value: BATCH_DISTRIBUTOR_FEE,
+        query: { enabled: simulateEnabled },
+      }
+      : token
       ? {
         address: BATCH_DISTRIBUTOR_CONTRACT_ADDRESS,
         abi: BatchDistributorAbi,
         functionName: "distributeToken",
         args: [token.address, { txns: simulatedAddresses.map((addr, i) => ({ recipient: addr, amount: simulatedAmounts[i] })) }],
         value: BATCH_DISTRIBUTOR_FEE,
-        query: { enabled: showTxObject && simulatedAddresses.every((a) => !!a) && totalAmount > 0n && !needsApproval },
+        query: { enabled: simulateEnabled && totalAmount > 0n && !needsApproval },
       }
       : {
         address: BATCH_DISTRIBUTOR_CONTRACT_ADDRESS,
@@ -168,7 +194,7 @@ export function BatchSimpleEditor({
         functionName: "distributeEther",
         args: [{ txns: simulatedAddresses.map((addr, i) => ({ recipient: addr, amount: simulatedAmounts[i] })) }],
         value: totalAmount + BATCH_DISTRIBUTOR_FEE,
-        query: { enabled: showTxObject && simulatedAddresses.every((a) => !!a) && totalAmount > BigInt(0) },
+        query: { enabled: simulateEnabled && totalAmount > 0n },
       }
   );
 
@@ -183,23 +209,25 @@ export function BatchSimpleEditor({
       }}
     >
       <div className="flex flex-col gap-3 mt-2">
-        {/* uniform amount toggle */}
-        <div className="flex items-center gap-2">
-          <Switch
-            id="uniform-amount"
-            checked={uniformAmount}
-            onCheckedChange={setUniformAmount}
-            className="rounded-none **:data-[slot=switch-thumb]:rounded-none"
-          />
-          <Label htmlFor="uniform-amount" className="text-xs cursor-pointer">
-            Same amount for all
-          </Label>
-        </div>
+        {/* uniform amount toggle — hidden for NFTs since each tokenId is unique */}
+        {!isNft && (
+          <div className="flex items-center gap-2">
+            <Switch
+              id="uniform-amount"
+              checked={uniformAmount}
+              onCheckedChange={setUniformAmount}
+              className="rounded-none **:data-[slot=switch-thumb]:rounded-none"
+            />
+            <Label htmlFor="uniform-amount" className="text-xs cursor-pointer">
+              Same amount for all
+            </Label>
+          </div>
+        )}
 
         {/* column headers */}
         <div className="hidden md:grid grid-cols-[1fr_9rem_2rem] gap-1 text-xs text-muted-foreground px-1">
           <span>Address</span>
-          <span>Amount ({symbol})</span>
+          <span>{isNft ? "Token ID" : `Amount (${symbol})`}</span>
           <span />
         </div>
 
@@ -221,7 +249,11 @@ export function BatchSimpleEditor({
                       name={`recipients[${i}].amount`}
                       validators={{
                         onChange: ({ value }: { value?: string }) => {
-                          if (!value) return "Please enter an amount";
+                          if (!value) return isNft ? "Please enter a token ID" : "Please enter an amount";
+                          if (isNft) {
+                            if (!/^\d+$/.test(value)) return "Token ID must be a non-negative integer";
+                            return undefined;
+                          }
                           const n = parseFloat(value);
                           if (isNaN(n)) return "Invalid number";
                           if (n <= 0) return "Must be > 0";
@@ -280,11 +312,15 @@ export function BatchSimpleEditor({
               Reset
             </Button>
           </div>
-          {/* balance + running total */}
+          {/* balance */}
           <div className="flex flex-row items-center justify-between text-xs">
             <p className="text-muted-foreground">Balance</p>
             {isBalanceLoading ? (
               <Skeleton className="w-24 h-4" />
+            ) : isNft ? (
+              <span className={isOverNativeBalance ? "text-red-400" : ""}>
+                {formatEther(nativeBalance?.value ?? BigInt(0))} {nativeBalance?.symbol ?? "ETH"}
+              </span>
             ) : (
               <span>
                 {token
@@ -297,7 +333,10 @@ export function BatchSimpleEditor({
           {/* Batch */}
           <div className="flex flex-row items-center justify-between text-xs">
             <p className="text-muted-foreground">Batch</p>
-            <p>{formatAmount(totalAmount)} {symbol}</p>
+            {isNft
+              ? <p>{recipients.filter(r => r.amount).length} {symbol}</p>
+              : <p>{formatAmount(totalAmount)} {symbol}</p>
+            }
           </div>
           {/* fee */}
           <div className="flex flex-row items-center justify-between text-xs">
@@ -322,25 +361,119 @@ export function BatchSimpleEditor({
             const isAllowanceSufficient = !needsApproval;
             const canSend = canSubmit && !isOverBalance && !isOverNativeBalance && !isDistributing;
 
+            if (isNft && token) {
+              const approved = isApprovedForAll ?? false;
+              const canApproveNft = canSubmit && !isApproving && !approved;
+              const canSendNft = canSend && approved;
+              return (
+                <div className="flex flex-col gap-4">
+                  {/* step 1 — approve for all */}
+                  <div className="grid grid-cols-[1.25rem_1fr] gap-x-4 gap-y-2 items-start">
+                    <span className={`w-5 h-5 shrink-0 border text-xs flex items-center justify-center mt-0.5 ${approved ? "border-green-500 text-green-500" : "border-muted-foreground text-muted-foreground"}`}>
+                      1
+                    </span>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="rounded-none flex-1 hover:cursor-pointer"
+                      disabled={!canApproveNft || approved}
+                      onClick={async () => {
+                        try {
+                          await approveWrite.mutateAsync({
+                            address: token.address,
+                            abi: erc721Abi,
+                            functionName: "setApprovalForAll",
+                            args: [BATCH_DISTRIBUTOR_CONTRACT_ADDRESS as Address, true],
+                          });
+                        } catch {
+                          // user rejected or tx failed — errors surfaced by wallet
+                        }
+                      }}
+                    >
+                      {isApproving && <Loader2 className="w-4 h-4 animate-spin" />}
+                      Approve for all
+                    </Button>
+                    {(approveWrite.data || approveWrite.isPending || isApproveConfirming) && (
+                      <>
+                        <div />
+                        <TransactionStatus
+                          isPending={approveWrite.isPending}
+                          isConfirming={isApproveConfirming}
+                          isConfirmed={isApproveConfirmed}
+                          txHash={approveWrite.data}
+                          blockExplorerUrl={blockExplorerUrl}
+                        />
+                      </>
+                    )}
+                  </div>
+                  {/* step 2 — send */}
+                  <div className="grid grid-cols-[1.25rem_1fr] gap-x-4 gap-y-2 items-start">
+                    <span className={`w-5 h-5 shrink-0 border text-xs flex items-center justify-center mt-0.5 ${approved ? "border-foreground text-foreground" : "border-muted-foreground text-muted-foreground"}`}>
+                      2
+                    </span>
+                    <div className="grid grid-cols-2 gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="rounded-none hover:cursor-pointer"
+                        disabled={!canSendNft}
+                        onClick={() => setShowTxObject((prev) => !prev)}
+                      >
+                        Request
+                      </Button>
+                      <Button
+                        type="submit"
+                        className="rounded-none hover:cursor-pointer"
+                        disabled={!canSendNft}
+                      >
+                        {isDistributing ? <Loader2 className="w-4 h-4 animate-spin" /> : "Send batch"}
+                      </Button>
+                    </div>
+                    <div />
+                    <TransactionStatus
+                      isPending={writeContract.isPending}
+                      isConfirming={isConfirming}
+                      isConfirmed={isConfirmed}
+                      txHash={writeContract.data}
+                      blockExplorerUrl={blockExplorerUrl}
+                      error={submitError}
+                      onClearError={() => setSubmitError(null)}
+                    />
+                  </div>
+                </div>
+              );
+            }
+
             if (!token) {
               return (
-                <div className="grid grid-cols-2 gap-2">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="rounded-none hover:cursor-pointer"
-                    disabled={!canSend}
-                    onClick={() => setShowTxObject((prev) => !prev)}
-                  >
-                    Request
-                  </Button>
-                  <Button
-                    type="submit"
-                    className="rounded-none hover:cursor-pointer"
-                    disabled={!canSend}
-                  >
-                    {isDistributing ? <Loader2 className="w-4 h-4 animate-spin" /> : "Send batch"}
-                  </Button>
+                <div className="flex flex-col gap-2">
+                  <div className="grid grid-cols-2 gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="rounded-none hover:cursor-pointer"
+                      disabled={!canSend}
+                      onClick={() => setShowTxObject((prev) => !prev)}
+                    >
+                      Request
+                    </Button>
+                    <Button
+                      type="submit"
+                      className="rounded-none hover:cursor-pointer"
+                      disabled={!canSend}
+                    >
+                      {isDistributing ? <Loader2 className="w-4 h-4 animate-spin" /> : "Send batch"}
+                    </Button>
+                  </div>
+                  <TransactionStatus
+                    isPending={writeContract.isPending}
+                    isConfirming={isConfirming}
+                    isConfirmed={isConfirmed}
+                    txHash={writeContract.data}
+                    blockExplorerUrl={blockExplorerUrl}
+                    error={submitError}
+                    onClearError={() => setSubmitError(null)}
+                  />
                 </div>
               );
             }
@@ -351,11 +484,11 @@ export function BatchSimpleEditor({
             return (
               <div className="flex flex-col gap-4">
                 {/* step 1 — approve */}
-                <div className="flex flex-col gap-2">
-                  <div className="flex flex-row items-center gap-4">
-                    <span className={`w-5 h-5 shrink-0 border text-xs flex items-center justify-center ${isAllowanceSufficient ? "border-green-500 text-green-500" : "border-muted-foreground text-muted-foreground"}`}>
-                      1
-                    </span>
+                <div className="grid grid-cols-[1.25rem_1fr] gap-x-4 gap-y-2 items-start">
+                  <span className={`w-5 h-5 shrink-0 border text-xs flex items-center justify-center mt-0.5 ${isAllowanceSufficient ? "border-green-500 text-green-500" : "border-muted-foreground text-muted-foreground"}`}>
+                    1
+                  </span>
+                  <div className="flex flex-row gap-2">
                     <Button
                       type="button"
                       variant="outline"
@@ -399,7 +532,8 @@ export function BatchSimpleEditor({
                     </Button>
                   </div>
                   {(approveWrite.data || approveWrite.isPending || isApproveConfirming) && (
-                    <div className="ml-9">
+                    <>
+                      <div />
                       <TransactionStatus
                         isPending={approveWrite.isPending}
                         isConfirming={isApproveConfirming}
@@ -407,16 +541,16 @@ export function BatchSimpleEditor({
                         txHash={approveWrite.data}
                         blockExplorerUrl={blockExplorerUrl}
                       />
-                    </div>
+                    </>
                   )}
                 </div>
 
                 {/* step 2 — send */}
-                <div className="flex flex-row items-center gap-4">
-                  <span className={`w-5 h-5 shrink-0 border text-xs flex items-center justify-center ${isAllowanceSufficient ? "border-foreground text-foreground" : "border-muted-foreground text-muted-foreground"}`}>
+                <div className="grid grid-cols-[1.25rem_1fr] gap-x-4 gap-y-2 items-start">
+                  <span className={`w-5 h-5 shrink-0 border text-xs flex items-center justify-center mt-0.5 ${isAllowanceSufficient ? "border-foreground text-foreground" : "border-muted-foreground text-muted-foreground"}`}>
                     2
                   </span>
-                  <div className="grid grid-cols-2 gap-2 flex-1">
+                  <div className="grid grid-cols-2 gap-2">
                     <Button
                       type="button"
                       variant="outline"
@@ -434,6 +568,16 @@ export function BatchSimpleEditor({
                       {isDistributing ? <Loader2 className="w-4 h-4 animate-spin" /> : "Send batch"}
                     </Button>
                   </div>
+                  <div />
+                  <TransactionStatus
+                    isPending={writeContract.isPending}
+                    isConfirming={isConfirming}
+                    isConfirmed={isConfirmed}
+                    txHash={writeContract.data}
+                    blockExplorerUrl={blockExplorerUrl}
+                    error={submitError}
+                    onClearError={() => setSubmitError(null)}
+                  />
                 </div>
               </div>
             );
@@ -447,17 +591,6 @@ export function BatchSimpleEditor({
             isError={isErrorSimulate}
           />
         )}
-        <div className="ml-9">
-          <TransactionStatus
-            isPending={writeContract.isPending}
-            isConfirming={isConfirming}
-            isConfirmed={isConfirmed}
-            txHash={writeContract.data}
-            blockExplorerUrl={blockExplorerUrl}
-            error={submitError}
-            onClearError={() => setSubmitError(null)}
-          />
-        </div>
       </div>
     </form>
   );

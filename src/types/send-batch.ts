@@ -10,6 +10,7 @@ export type BatchTokenProps = {
   decimals: number;
   balance: bigint | undefined;
   isLoading: boolean;
+  isNft?: boolean;
 };
 
 export type BatchEditorProps = {
@@ -18,4 +19,6 @@ export type BatchEditorProps = {
   atomicBatchSupported: boolean;
   selectedChain: number | null;
   token?: BatchTokenProps;
+  isApprovedForAll?: boolean;
+  onApproveSuccess?: () => void;
 };
