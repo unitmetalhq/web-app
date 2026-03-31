@@ -3,14 +3,15 @@ import { createRoot } from "react-dom/client"
 import "./index.css"
 
 // --- Web3 ---
-import {
-  RainbowKitProvider,
-  getDefaultConfig,
-  lightTheme,
-} from "@rainbow-me/rainbowkit"
+// import {
+//   RainbowKitProvider,
+//   getDefaultConfig,
+//   lightTheme,
+// } from "@rainbow-me/rainbowkit"
+// import "@rainbow-me/rainbowkit/styles.css"
 import { mainnet } from "wagmi/chains"
-import { WagmiProvider, http } from "wagmi"
-import "@rainbow-me/rainbowkit/styles.css"
+import { WagmiProvider, createConfig, http, injected } from "wagmi"
+import { impersonatorConnector } from "@/lib/impersonator-connector"
 
 // --- Router ---
 import { RouterProvider, createRouter } from "@tanstack/react-router"
@@ -27,11 +28,11 @@ import { Provider as JotaiProvider } from "jotai"
 import { ThemeProvider } from "@/components/theme-provider.tsx"
 
 // Web3 config
-// TO BE MIGRATED TO SELF DEVELOPED CONNECTOR
-const config = getDefaultConfig({
-  appName: "UnitMetal Web App",
-  projectId: import.meta.env.VITE_WALLETCONNECT_PROJECT_ID!,
+// multiInjectedProviderDiscovery: true (default) — wagmi auto-detects EIP-6963
+// wallets (MetaMask, Coinbase Wallet, Brave, etc.) and surfaces them via useConnectors().
+const config = createConfig({
   chains: [mainnet],
+  connectors: [injected(), impersonatorConnector],
   transports: {
     [mainnet.id]: http(import.meta.env.VITE_RPC_URL_ETHEREUM!),
     // [base.id]: http(import.meta.env.VITE_RPC_URL_BASE!),
@@ -58,11 +59,11 @@ createRoot(document.getElementById("root")!).render(
     <WagmiProvider config={config}>
       <QueryClientProvider client={queryClient}>
         <JotaiProvider>
-          <RainbowKitProvider theme={lightTheme({ borderRadius: "none" })}>
-            <ThemeProvider>
-              <RouterProvider router={router} />
-            </ThemeProvider>
-          </RainbowKitProvider>
+          {/* <RainbowKitProvider theme={lightTheme({ borderRadius: "none" })}> */}
+          <ThemeProvider>
+            <RouterProvider router={router} />
+          </ThemeProvider>
+          {/* </RainbowKitProvider> */}
         </JotaiProvider>
       </QueryClientProvider>
     </WagmiProvider>

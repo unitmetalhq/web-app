@@ -16,6 +16,7 @@ import {
 } from "wagmi";
 import { normalize } from "viem/ens";
 import { useMediaQuery } from "@/hooks/use-media-query";
+import { useIsViewOnly } from "@/hooks/use-is-view-only";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   InputGroup,
@@ -37,7 +38,9 @@ export default function SendNativeTokenForm({
   const config = useConfig();
 
   // check if desktop
-  const isDesktop = useMediaQuery("(min-width: 768px)");
+  const isDesktop = useMediaQuery("(min-width: 768px)")
+
+  const isViewOnly = useIsViewOnly();;
 
   // get connection
   const connection = useConnection()
@@ -190,6 +193,20 @@ export default function SendNativeTokenForm({
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [refetchEnsAddress]);
+
+  // Handle keyboard shortcut for Request (toggle tx object)
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      const tag = (e.target as HTMLElement).tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA") return;
+      if (e.key === "t" || e.key === "T") {
+        e.preventDefault();
+        setShowTxObject((prev) => !prev);
+      }
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
 
   useEffect(() => {
     // reset the transaction state
@@ -479,44 +496,53 @@ export default function SendNativeTokenForm({
                 >
                   <Eraser className="w-4 h-4" />
                 </Button>
-                <Button
-                  className="hover:cursor-pointer rounded-none col-span-2"
-                  variant="outline"
-                  type="button"
-                  disabled={
-                    !canSubmit ||
-                    isPendingSendNativeTransaction ||
-                    isConfirmingSendNativeTransaction
-                  }
-                  onClick={() => setShowTxObject((prev) => !prev)}
-                >
-                  Request
-                </Button>
-                <Button
-                  className="hover:cursor-pointer rounded-none col-span-2"
-                  type="submit"
-                  disabled={
-                    !canSubmit ||
-                    isPendingSendNativeTransaction ||
-                    isConfirmingSendNativeTransaction
-                  }
-                >
-                  {isPendingSendNativeTransaction ? (
-                    <>
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                    </>
-                  ) : isConfirmingSendNativeTransaction ? (
-                    <>
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                    </>
-                  ) : isConfirmedSendNativeTransaction ? (
-                    <>
-                      <Check className="w-4 h-4" />
-                    </>
-                  ) : (
-                    <>Send</>
-                  )}
-                </Button>
+                {isViewOnly ? (
+                  // View-only: single Request button spanning remaining columns
+                  <Button
+                    className="hover:cursor-pointer rounded-none col-span-4"
+                    variant="outline"
+                    type="button"
+                    disabled={!canSubmit}
+                    onClick={() => setShowTxObject((prev) => !prev)}
+                  >
+                    Request <Kbd>T</Kbd>
+                  </Button>
+                ) : (
+                  <>
+                    <Button
+                      className="hover:cursor-pointer rounded-none col-span-2"
+                      variant="outline"
+                      type="button"
+                      disabled={
+                        !canSubmit ||
+                        isPendingSendNativeTransaction ||
+                        isConfirmingSendNativeTransaction
+                      }
+                      onClick={() => setShowTxObject((prev) => !prev)}
+                    >
+                      Request <Kbd>T</Kbd>
+                    </Button>
+                    <Button
+                      className="hover:cursor-pointer rounded-none col-span-2"
+                      type="submit"
+                      disabled={
+                        !canSubmit ||
+                        isPendingSendNativeTransaction ||
+                        isConfirmingSendNativeTransaction
+                      }
+                    >
+                      {isPendingSendNativeTransaction ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : isConfirmingSendNativeTransaction ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : isConfirmedSendNativeTransaction ? (
+                        <Check className="w-4 h-4" />
+                      ) : (
+                        <>Send</>
+                      )}
+                    </Button>
+                  </>
+                )}
               </div>
             )}
           </form.Subscribe>

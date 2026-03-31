@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { useForm, useStore } from "@tanstack/react-form";
 import type { AnyFieldApi } from "@tanstack/react-form";
 import { Loader2, Check, Search, Eraser } from "lucide-react";
-import { type Address } from "viem";
+import { type Address, erc721Abi } from "viem";
 import {
   useConfig,
   useWaitForTransactionReceipt,
@@ -25,48 +25,8 @@ import { RefreshCcw } from "lucide-react";
 import { TransactionObject } from "@/components/transaction-object";
 import { TransactionStatus } from "@/components/transaction-status";
 import { Kbd } from "@/components/ui/kbd";
+import { useIsViewOnly } from "@/hooks/use-is-view-only";
 
-const erc721Abi = [
-  {
-    inputs: [{ name: "owner", type: "address" }],
-    name: "balanceOf",
-    outputs: [{ name: "", type: "uint256" }],
-    stateMutability: "view",
-    type: "function",
-  },
-  {
-    inputs: [],
-    name: "name",
-    outputs: [{ name: "", type: "string" }],
-    stateMutability: "view",
-    type: "function",
-  },
-  {
-    inputs: [],
-    name: "symbol",
-    outputs: [{ name: "", type: "string" }],
-    stateMutability: "view",
-    type: "function",
-  },
-  {
-    inputs: [{ name: "tokenId", type: "uint256" }],
-    name: "ownerOf",
-    outputs: [{ name: "", type: "address" }],
-    stateMutability: "view",
-    type: "function",
-  },
-  {
-    inputs: [
-      { name: "from", type: "address" },
-      { name: "to", type: "address" },
-      { name: "tokenId", type: "uint256" },
-    ],
-    name: "safeTransferFrom",
-    outputs: [],
-    stateMutability: "nonpayable",
-    type: "function",
-  },
-] as const;
 
 export default function SendErc721TokenForm({
   selectedChain,
@@ -78,6 +38,8 @@ export default function SendErc721TokenForm({
 
   // get connection
   const connection = useConnection();
+
+  const isViewOnly = useIsViewOnly();
 
   // show/hide prepared transaction object
   const [showTxObject, setShowTxObject] = useState(false);
@@ -298,6 +260,20 @@ export default function SendErc721TokenForm({
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [refetchEnsAddress]);
+
+  // Handle keyboard shortcut for Request (toggle tx object)
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      const tag = (e.target as HTMLElement).tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA") return;
+      if (e.key === "t" || e.key === "T") {
+        e.preventDefault();
+        setShowTxObject((prev) => !prev);
+      }
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
 
   useEffect(() => {
     resetSendErc721Transaction();
@@ -542,38 +518,52 @@ export default function SendErc721TokenForm({
                 >
                   <Eraser className="w-4 h-4" />
                 </Button>
-                <Button
-                  className="hover:cursor-pointer rounded-none col-span-2"
-                  variant="outline"
-                  type="button"
-                  disabled={
-                    !canSubmit ||
-                    isPendingSendErc721Transaction ||
-                    isConfirmingSendErc721Transaction
-                  }
-                  onClick={() => setShowTxObject((prev) => !prev)}
-                >
-                  Request
-                </Button>
-                <Button
-                  className="hover:cursor-pointer rounded-none col-span-2"
-                  type="submit"
-                  disabled={
-                    !canSubmit ||
-                    isPendingSendErc721Transaction ||
-                    isConfirmingSendErc721Transaction
-                  }
-                >
-                  {isPendingSendErc721Transaction ? (
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                  ) : isConfirmingSendErc721Transaction ? (
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                  ) : isConfirmedSendErc721Transaction ? (
-                    <Check className="w-4 h-4" />
-                  ) : (
-                    <>Send</>
-                  )}
-                </Button>
+                {isViewOnly ? (
+                  <Button
+                    className="hover:cursor-pointer rounded-none col-span-4"
+                    variant="outline"
+                    type="button"
+                    disabled={!canSubmit}
+                    onClick={() => setShowTxObject((prev) => !prev)}
+                  >
+                    Request <Kbd>T</Kbd>
+                  </Button>
+                ) : (
+                  <>
+                    <Button
+                      className="hover:cursor-pointer rounded-none col-span-2"
+                      variant="outline"
+                      type="button"
+                      disabled={
+                        !canSubmit ||
+                        isPendingSendErc721Transaction ||
+                        isConfirmingSendErc721Transaction
+                      }
+                      onClick={() => setShowTxObject((prev) => !prev)}
+                    >
+                      Request <Kbd>T</Kbd>
+                    </Button>
+                    <Button
+                      className="hover:cursor-pointer rounded-none col-span-2"
+                      type="submit"
+                      disabled={
+                        !canSubmit ||
+                        isPendingSendErc721Transaction ||
+                        isConfirmingSendErc721Transaction
+                      }
+                    >
+                      {isPendingSendErc721Transaction ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : isConfirmingSendErc721Transaction ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : isConfirmedSendErc721Transaction ? (
+                        <Check className="w-4 h-4" />
+                      ) : (
+                        <>Send</>
+                      )}
+                    </Button>
+                  </>
+                )}
               </div>
             )}
           </form.Subscribe>

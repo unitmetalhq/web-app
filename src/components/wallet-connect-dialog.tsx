@@ -1,0 +1,310 @@
+// ── WalletConnectButton ───────────────────────────────────────────────────────
+//
+// Replaces RainbowKit's ConnectButton. Renders a small button in the header
+// that opens a dialog for connecting/disconnecting wallets.
+//
+// Disconnected → "Connect" button → dialog with:
+//   - List of available wallets (EIP-6963 auto-detected + injected fallback)
+//   - Impersonator section: recent addresses (quick-select) + paste new address
+//
+// Connected → truncated address button → dialog with:
+//   - Full address display
+//   - "view" badge if in impersonator mode
+//   - Disconnect button
+
+import { useState } from "react";
+import { useConnection, useConnect, useConnectors, useDisconnect } from "wagmi";
+import { isAddress } from "viem";
+import { EllipsisVertical } from "lucide-react";
+import { setImpersonatorAddress } from "@/lib/impersonator-connector";
+import { truncateAddress } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
+
+// ── History helpers ───────────────────────────────────────────────────────────
+// Addresses are stored newest-first, capped at 10, deduplicated.
+
+const HISTORY_KEY = "impersonator.history";
+const MAX_HISTORY = 10;
+
+function loadHistory(): string[] {
+  try {
+    return JSON.parse(localStorage.getItem(HISTORY_KEY) ?? "[]");
+  } catch {
+    return [];
+  }
+}
+
+function saveToHistory(address: string): string[] {
+  const prev = loadHistory().filter((a) => a.toLowerCase() !== address.toLowerCase());
+  const next = [address, ...prev].slice(0, MAX_HISTORY);
+  localStorage.setItem(HISTORY_KEY, JSON.stringify(next));
+  return next;
+}
+
+function removeFromHistory(address: string): string[] {
+  const next = loadHistory().filter((a) => a.toLowerCase() !== address.toLowerCase());
+  localStorage.setItem(HISTORY_KEY, JSON.stringify(next));
+  return next;
+}
+
+// ── WalletConnectButton ───────────────────────────────────────────────────────
+
+export function WalletConnectButton() {
+  const connection = useConnection();
+  const connectors = useConnectors();
+  const { connect, isPending: isConnecting } = useConnect();
+  const { disconnect } = useDisconnect();
+
+  const [open, setOpen] = useState(false);
+  const [impersonatorInput, setImpersonatorInput] = useState("");
+  const [impersonatorError, setImpersonatorError] = useState("");
+  const [history, setHistory] = useState<string[]>(() => loadHistory());
+  // Tracks which history row has its delete menu open.
+  const [menuOpenFor, setMenuOpenFor] = useState<string | null>(null);
+
+  const isImpersonator = connection.connector?.id === "impersonator";
+
+  // ── connectAsAddress ──────────────────────────────────────────────────────
+  // Core connect logic used by both the input form and history quick-select.
+  // Saves the address to history on success.
+  function connectAsAddress(addr: string) {
+    const connector = connectors.find((c) => c.id === "impersonator");
+    if (!connector) {
+      setImpersonatorError("Impersonator connector not available");
+      return;
+    }
+    setImpersonatorAddress(addr);
+    connect(
+      { connector },
+      {
+        onSuccess: () => {
+          setHistory(saveToHistory(addr));
+          setOpen(false);
+          setImpersonatorInput("");
+          setImpersonatorError("");
+          setMenuOpenFor(null);
+        },
+        onError: (err) => {
+          setImpersonatorError(err.message);
+        },
+      }
+    );
+  }
+
+  function handleImpersonatorConnect() {
+    const trimmed = impersonatorInput.trim();
+    if (!isAddress(trimmed)) {
+      setImpersonatorError("Invalid Ethereum address");
+      return;
+    }
+    connectAsAddress(trimmed);
+  }
+
+  function handleRemove(addr: string) {
+    setHistory(removeFromHistory(addr));
+    setMenuOpenFor(null);
+  }
+
+  function handleClose() {
+    setImpersonatorInput("");
+    setImpersonatorError("");
+    setMenuOpenFor(null);
+  }
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(isOpen) => {
+        setOpen(isOpen);
+        if (!isOpen) handleClose();
+      }}
+    >
+      {/* ── Trigger button ────────────────────────────────────────────────── */}
+      <DialogTrigger
+        render={
+          <Button
+            variant="outline"
+            size="sm"
+            className="font-mono text-xs rounded-none h-8 hover:cursor-pointer"
+          />
+        }
+      >
+        {connection.isConnected ? (
+          <span className="flex items-center gap-1.5">
+            {truncateAddress(connection.address)}
+            {isImpersonator && (
+              <Badge variant="outline" className="text-[10px] px-1 py-0 rounded-none">
+                view
+              </Badge>
+            )}
+          </span>
+        ) : (
+          "Connect"
+        )}
+      </DialogTrigger>
+
+      <DialogContent>
+        {connection.isConnected ? (
+          // ── Connected view ─────────────────────────────────────────────────
+          <>
+            <DialogHeader>
+              <DialogTitle>Connected</DialogTitle>
+            </DialogHeader>
+
+            <p className="font-mono text-xs break-all text-muted-foreground">
+              {connection.address}
+            </p>
+
+            {isImpersonator && (
+              <Badge variant="outline" className="w-fit rounded-none">
+                Read-only
+              </Badge>
+            )}
+
+            <Button
+              variant="outline"
+              size="sm"
+              className="rounded-none w-full"
+              onClick={() => {
+                disconnect();
+                setOpen(false);
+              }}
+            >
+              Disconnect
+            </Button>
+          </>
+        ) : (
+          // ── Disconnected view ──────────────────────────────────────────────
+          <>
+            <DialogHeader>
+              <DialogTitle>Connect wallet</DialogTitle>
+            </DialogHeader>
+            <h2 className="text-xs text-muted-foreground">
+              Extension
+            </h2>
+            {/* Detected wallets (EIP-6963 + injected fallback) */}
+            <div className="flex flex-col gap-1">
+              {connectors
+                .filter((c) => c.id !== "impersonator")
+                .map((connector) => (
+                  <button
+                    key={connector.uid}
+                    type="button"
+                    disabled={isConnecting}
+                    className="flex items-center gap-2 px-2.5 py-2 text-xs text-left border border-input hover:bg-accent transition-colors disabled:opacity-50 hover:cursor-pointer"
+                    onClick={() => {
+                      connect({ connector });
+                      setOpen(false);
+                    }}
+                  >
+                    {connector.icon && (
+                      <img src={connector.icon} alt="" className="w-4 h-4 shrink-0" />
+                    )}
+                    <span>{connector.name}</span>
+                  </button>
+                ))}
+            </div>
+
+            {/* Impersonator section */}
+            <div className="flex flex-col gap-1.5 pt-1 border-t border-border">
+              <span className="text-xs text-muted-foreground">
+                View wallets — no signing
+              </span>
+
+              {/* ── Recent addresses ─────────────────────────────────────── */}
+              {history.length > 0 && (
+                <div className="flex flex-col max-h-32 overflow-y-auto border border-input">
+                  {history.map((addr) => (
+                    <div
+                      key={addr}
+                      className="flex items-center group"
+                    >
+                      {/* Quick-select: click row to connect immediately */}
+                      <button
+                        type="button"
+                        disabled={isConnecting}
+                        className="flex-1 px-2.5 py-1.5 text-left text-xs font-mono hover:bg-accent transition-colors disabled:opacity-50 hover:cursor-pointer truncate"
+                        onClick={() => {
+                          if (menuOpenFor === addr) {
+                            setMenuOpenFor(null);
+                          } else {
+                            connectAsAddress(addr);
+                          }
+                        }}
+                      >
+                        {truncateAddress(addr)}
+                      </button>
+
+                      {/* Ellipsis menu — extra click required before delete appears */}
+                      {menuOpenFor === addr ? (
+                        <button
+                          type="button"
+                          className="px-2 py-1.5 text-xs text-destructive hover:bg-accent transition-colors hover:cursor-pointer shrink-0"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleRemove(addr);
+                          }}
+                        >
+                          Remove
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          className="px-2 py-1.5 text-muted-foreground hover:bg-accent transition-colors hover:cursor-pointer shrink-0 opacity-0 group-hover:opacity-100"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setMenuOpenFor(addr);
+                          }}
+                        >
+                          <EllipsisVertical className="w-3 h-3" />
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Address input + connect */}
+              <div className="flex gap-1.5">
+                <Input
+                  placeholder="0x..."
+                  value={impersonatorInput}
+                  onChange={(e) => {
+                    setImpersonatorInput(e.target.value);
+                    setImpersonatorError("");
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") handleImpersonatorConnect();
+                  }}
+                  className="font-mono"
+                  aria-invalid={!!impersonatorError}
+                />
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="rounded-none shrink-0"
+                  disabled={isConnecting || !impersonatorInput}
+                  onClick={handleImpersonatorConnect}
+                >
+                  View
+                </Button>
+              </div>
+              {impersonatorError && (
+                <span className="text-xs text-destructive">{impersonatorError}</span>
+              )}
+            </div>
+          </>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}

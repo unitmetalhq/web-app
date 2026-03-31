@@ -16,6 +16,7 @@ import {
 import { useQuery } from "@tanstack/react-query";
 import { normalize } from "viem/ens";
 import { useMediaQuery } from "@/hooks/use-media-query";
+import { useIsViewOnly } from "@/hooks/use-is-view-only";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   InputGroup,
@@ -39,6 +40,8 @@ export default function SendErc20TokenForm({
 
   // check if desktop
   const isDesktop = useMediaQuery("(min-width: 768px)");
+
+  const isViewOnly = useIsViewOnly();
 
   // get connection
   const connection = useConnection();
@@ -253,6 +256,20 @@ export default function SendErc20TokenForm({
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [refetchEnsAddress]);
+
+  // Handle keyboard shortcut for Request (toggle tx object)
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      const tag = (e.target as HTMLElement).tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA") return;
+      if (e.key === "t" || e.key === "T") {
+        e.preventDefault();
+        setShowTxObject((prev) => !prev);
+      }
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
 
   useEffect(() => {
     resetSendErc20Transaction();
@@ -606,38 +623,52 @@ export default function SendErc20TokenForm({
                 >
                   <Eraser className="w-4 h-4" />
                 </Button>
-                <Button
-                  className="hover:cursor-pointer rounded-none col-span-2"
-                  variant="outline"
-                  type="button"
-                  disabled={
-                    !canSubmit ||
-                    isPendingSendErc20Transaction ||
-                    isConfirmingSendErc20Transaction
-                  }
-                  onClick={() => setShowTxObject((prev) => !prev)}
-                >
-                  Request
-                </Button>
-                <Button
-                  className="hover:cursor-pointer rounded-none col-span-2"
-                  type="submit"
-                  disabled={
-                    !canSubmit ||
-                    isPendingSendErc20Transaction ||
-                    isConfirmingSendErc20Transaction
-                  }
-                >
-                  {isPendingSendErc20Transaction ? (
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                  ) : isConfirmingSendErc20Transaction ? (
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                  ) : isConfirmedSendErc20Transaction ? (
-                    <Check className="w-4 h-4" />
-                  ) : (
-                    <>Send</>
-                  )}
-                </Button>
+                {isViewOnly ? (
+                  <Button
+                    className="hover:cursor-pointer rounded-none col-span-4"
+                    variant="outline"
+                    type="button"
+                    disabled={!canSubmit}
+                    onClick={() => setShowTxObject((prev) => !prev)}
+                  >
+                    Request <Kbd>T</Kbd>
+                  </Button>
+                ) : (
+                  <>
+                    <Button
+                      className="hover:cursor-pointer rounded-none col-span-2"
+                      variant="outline"
+                      type="button"
+                      disabled={
+                        !canSubmit ||
+                        isPendingSendErc20Transaction ||
+                        isConfirmingSendErc20Transaction
+                      }
+                      onClick={() => setShowTxObject((prev) => !prev)}
+                    >
+                      Request <Kbd>T</Kbd>
+                    </Button>
+                    <Button
+                      className="hover:cursor-pointer rounded-none col-span-2"
+                      type="submit"
+                      disabled={
+                        !canSubmit ||
+                        isPendingSendErc20Transaction ||
+                        isConfirmingSendErc20Transaction
+                      }
+                    >
+                      {isPendingSendErc20Transaction ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : isConfirmingSendErc20Transaction ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : isConfirmedSendErc20Transaction ? (
+                        <Check className="w-4 h-4" />
+                      ) : (
+                        <>Send</>
+                      )}
+                    </Button>
+                  </>
+                )}
               </div>
             )}
           </form.Subscribe>
