@@ -83,7 +83,9 @@ export const impersonatorConnector = createConnector((config) => {
         const { request } = transport({ chain, retryCount: 0 });
         return request({ method, params } as Parameters<typeof request>[0]);
       },
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
       on: (_event: string, _handler: unknown) => {},
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
       removeListener: (_event: string, _handler: unknown) => {},
     };
   }
@@ -96,7 +98,12 @@ export const impersonatorConnector = createConnector((config) => {
     // ── connect ───────────────────────────────────────────────────────────────
     // Reads _pendingAddress (new connection) or falls back to localStorage
     // (page-reload reconnection via isAuthorized → connect({ isReconnecting })).
-    async connect() {
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    async connect<W extends boolean = false>(_params?: {
+      chainId?: number;
+      isReconnecting?: boolean;
+      withCapabilities?: W | boolean;
+    }) {
       const addr = _pendingAddress ?? localStorage.getItem(STORAGE_KEY);
       _pendingAddress = null; // consume immediately
 
@@ -105,7 +112,15 @@ export const impersonatorConnector = createConnector((config) => {
       }
 
       localStorage.setItem(STORAGE_KEY, addr);
-      return { accounts: [addr as Address], chainId: config.chains[0].id };
+      return {
+        accounts: [addr as Address] as readonly Address[],
+        chainId: config.chains[0].id,
+      } as {
+        accounts: W extends true
+          ? readonly { address: Address; capabilities: Record<string, unknown> }[]
+          : readonly Address[];
+        chainId: number;
+      };
     },
 
     async disconnect() {

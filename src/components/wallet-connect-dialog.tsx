@@ -15,7 +15,7 @@
 import { useState } from "react";
 import { useConnection, useConnect, useConnectors, useDisconnect } from "wagmi";
 import { isAddress } from "viem";
-import { EllipsisVertical } from "lucide-react";
+import { Check, Copy, EllipsisVertical, View } from "lucide-react";
 import { setImpersonatorAddress } from "@/lib/impersonator-connector";
 import { truncateAddress } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -30,10 +30,9 @@ import {
 } from "@/components/ui/dialog";
 
 // ── History helpers ───────────────────────────────────────────────────────────
-// Addresses are stored newest-first, capped at 10, deduplicated.
+// Addresses are stored newest-first, deduplicated. No cap on stored count.
 
 const HISTORY_KEY = "impersonator.history";
-const MAX_HISTORY = 10;
 
 function loadHistory(): string[] {
   try {
@@ -45,7 +44,7 @@ function loadHistory(): string[] {
 
 function saveToHistory(address: string): string[] {
   const prev = loadHistory().filter((a) => a.toLowerCase() !== address.toLowerCase());
-  const next = [address, ...prev].slice(0, MAX_HISTORY);
+  const next = [address, ...prev];
   localStorage.setItem(HISTORY_KEY, JSON.stringify(next));
   return next;
 }
@@ -72,6 +71,14 @@ export function WalletConnectButton() {
   const [menuOpenFor, setMenuOpenFor] = useState<string | null>(null);
 
   const isImpersonator = connection.connector?.id === "impersonator";
+  const [copied, setCopied] = useState(false);
+
+  function handleCopyAddress() {
+    if (!connection.address) return;
+    navigator.clipboard.writeText(connection.address);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  }
 
   // ── connectAsAddress ──────────────────────────────────────────────────────
   // Core connect logic used by both the input form and history quick-select.
@@ -142,8 +149,8 @@ export function WalletConnectButton() {
           <span className="flex items-center gap-1.5">
             {truncateAddress(connection.address)}
             {isImpersonator && (
-              <Badge variant="outline" className="text-[10px] px-1 py-0 rounded-none">
-                view
+              <Badge className="text-[10px] px-1 py-0 rounded-none">
+                <View />
               </Badge>
             )}
           </span>
@@ -160,9 +167,18 @@ export function WalletConnectButton() {
               <DialogTitle>Connected</DialogTitle>
             </DialogHeader>
 
-            <p className="font-mono text-xs break-all text-muted-foreground">
-              {connection.address}
-            </p>
+            <div className="flex flex-row gap-2 items-center">
+              <p className="font-mono text-xs break-all text-muted-foreground underline underline-offset-4">
+                {connection.address}
+              </p>
+              <button
+                type="button"
+                onClick={handleCopyAddress}
+                className="text-muted-foreground hover:text-foreground transition-colors hover:cursor-pointer"
+              >
+                {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+              </button>
+            </div>
 
             {isImpersonator && (
               <Badge variant="outline" className="w-fit rounded-none">
@@ -222,7 +238,7 @@ export function WalletConnectButton() {
 
               {/* ── Recent addresses ─────────────────────────────────────── */}
               {history.length > 0 && (
-                <div className="flex flex-col max-h-32 overflow-y-auto border border-input">
+                <div className="flex flex-col max-h-40 overflow-y-auto border border-input">
                   {history.map((addr) => (
                     <div
                       key={addr}
