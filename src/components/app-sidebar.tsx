@@ -9,6 +9,7 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  useSidebar,
 } from "@/components/ui/sidebar"
 import {
   Home,
@@ -27,6 +28,12 @@ const workspaceItems = [
 ]
 
 export function AppSidebar() {
+  const { isMobile, setOpenMobile } = useSidebar()
+
+  function handleNavClick() {
+    if (isMobile) setOpenMobile(false)
+  }
+
   return (
     <Sidebar collapsible="icon">
       <SidebarHeader>
@@ -65,7 +72,7 @@ export function AppSidebar() {
             <SidebarMenu>
               {workspaceItems.map((item) => (
                 <SidebarMenuItem key={item.title}>
-                  <SidebarMenuButton render={<Link to={item.to} />}>
+                  <SidebarMenuButton render={<Link to={item.to} onClick={handleNavClick} />}>
                     <item.icon className="h-4 w-4" />
                     <span>{item.title}</span>
                   </SidebarMenuButton>
@@ -75,7 +82,6 @@ export function AppSidebar() {
           </SidebarGroupContent>
         </SidebarGroup>
       </SidebarContent>
-
       <SidebarFooter />
     </Sidebar>
   )

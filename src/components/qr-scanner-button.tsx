@@ -47,7 +47,7 @@ export default function QrScannerButton({
     }
   }, []);
 
-  function startScanner() {
+  const startScanner = useCallback(() => {
     // Guard against double-start (e.g. dialog reopened before timeout fires).
     if (!videoRef.current || scannerRef.current) return;
     scannerRef.current = new QrScanner(
@@ -67,7 +67,7 @@ export default function QrScannerButton({
       }
     );
     scannerRef.current.start().catch(() => setOpen(false));
-  }
+  }, [onScan, stopScanner]);
 
   function handleOpenChange(next: boolean) {
     if (!next) stopScanner();
@@ -81,7 +81,7 @@ export default function QrScannerButton({
       const id = setTimeout(() => startScanner(), 50);
       return () => clearTimeout(id);
     }
-  }, [open]);
+  }, [open, startScanner]);
 
   // stop on unmount
   useEffect(() => () => stopScanner(), [stopScanner]);
