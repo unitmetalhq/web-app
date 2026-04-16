@@ -1,14 +1,6 @@
 import { StrictMode } from "react"
 import { createRoot } from "react-dom/client"
 import "./index.css"
-
-// --- Web3 ---
-// import {
-//   RainbowKitProvider,
-//   getDefaultConfig,
-//   lightTheme,
-// } from "@rainbow-me/rainbowkit"
-// import "@rainbow-me/rainbowkit/styles.css"
 import { mainnet } from "wagmi/chains"
 import { WagmiProvider, createConfig, http, injected } from "wagmi"
 import { impersonatorConnector } from "@/lib/impersonator-connector"
@@ -20,9 +12,6 @@ import { routeTree } from "./routeTree.gen"
 
 // --- State ---
 import { Provider as JotaiProvider } from "jotai"
-
-// --- App ---
-// import App from "./App.tsx"
 
 // --- Theme ---
 import { ThemeProvider } from "@/components/theme-provider.tsx"
@@ -59,11 +48,9 @@ createRoot(document.getElementById("root")!).render(
     <WagmiProvider config={config}>
       <QueryClientProvider client={queryClient}>
         <JotaiProvider>
-          {/* <RainbowKitProvider theme={lightTheme({ borderRadius: "none" })}> */}
           <ThemeProvider>
             <RouterProvider router={router} />
           </ThemeProvider>
-          {/* </RainbowKitProvider> */}
         </JotaiProvider>
       </QueryClientProvider>
     </WagmiProvider>

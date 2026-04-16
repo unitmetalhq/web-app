@@ -17,7 +17,7 @@ import { useConnection, useConnect, useConnectors, useDisconnect, useEnsAddress 
 import { isAddress } from "viem";
 import { normalize } from "viem/ens";
 import { useForm, useStore, type AnyFieldApi } from "@tanstack/react-form";
-import { Check, Copy, EllipsisVertical, Loader2, Search, View } from "lucide-react";
+import { Check, Copy, EllipsisVertical, Loader2, Search, View, Wallet } from "lucide-react";
 import { setImpersonatorAddress } from "@/lib/impersonator-connector";
 import { truncateAddress } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -256,9 +256,10 @@ export function WalletConnectButton() {
                       setOpen(false);
                     }}
                   >
-                    {connector.icon && (
-                      <img src={connector.icon} alt="" className="w-4 h-4 shrink-0" />
-                    )}
+                    {connector.icon
+                      ? <img src={connector.icon} alt="" className="w-4 h-4 shrink-0" />
+                      : <Wallet className="w-4 h-4 shrink-0 text-muted-foreground" />
+                    }
                     <span>{connector.name}</span>
                   </button>
                 ))}
