@@ -4,11 +4,8 @@ import { Loader2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { NftCollection } from "@/lib/atoms/custom-nft-list";
+import { erc721Abi } from "viem";
 
-const erc721MetaAbi = [
-  { name: "name",   type: "function", stateMutability: "view", inputs: [], outputs: [{ type: "string" }] },
-  { name: "symbol", type: "function", stateMutability: "view", inputs: [], outputs: [{ type: "string" }] },
-] as const;
 
 export default function AddCustomNft({
   chainId,
@@ -28,8 +25,8 @@ export default function AddCustomNft({
   const { data, isLoading, isFetching } = useReadContracts({
     contracts: queryAddress
       ? [
-          { address: queryAddress, abi: erc721MetaAbi, functionName: "name",   chainId },
-          { address: queryAddress, abi: erc721MetaAbi, functionName: "symbol", chainId },
+          { address: queryAddress, abi: erc721Abi, functionName: "name",   chainId },
+          { address: queryAddress, abi: erc721Abi, functionName: "symbol", chainId },
         ]
       : [],
     query: { enabled: !!queryAddress },
