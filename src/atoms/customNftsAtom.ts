@@ -5,7 +5,7 @@ export type NftCollection = {
   address: `0x${string}`;
   name: string;
   symbol: string;
-  standard: string;
+  standard: "ERC721";
 };
 
-export const customNftsAtom = atomWithStorage<NftCollection[]>("custom-nft-list", []);
+export const customNftsAtom = atomWithStorage<NftCollection[]>("customNfts", []);

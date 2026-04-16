@@ -1,6 +1,6 @@
 import { useForm, useStore } from "@tanstack/react-form";
 import { useAtom } from "jotai";
-import { customTokensAtom } from "@/lib/atoms/custom-token-list";
+import { customTokensAtom } from "@/atoms/customTokensAtom";
 import { useReadContracts, useConnection } from "wagmi";
 import { isAddress, erc20Abi, type Address } from "viem";
 import { Loader2, Plus, CheckCircle } from "lucide-react";

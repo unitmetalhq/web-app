@@ -4,8 +4,9 @@ import { Input } from "@/components/ui/input";
 import { useForm, useStore } from "@tanstack/react-form";
 import type { AnyFieldApi } from "@tanstack/react-form";
 import { Loader2, Search, Plus, X, Eraser } from "lucide-react";
-import { parseEther, formatEther, parseUnits, formatUnits, erc20Abi, erc721Abi, maxUint256, type Address } from "viem";
-import { useEnsAddress, useWriteContract, useWaitForTransactionReceipt, useConfig, useSimulateContract, useReadContract, useConnection } from "wagmi";
+import { parseEther, formatEther, parseUnits, formatUnits, encodeFunctionData, erc20Abi, erc721Abi, maxUint256, type Address } from "viem";
+import { useEnsAddress, useWriteContract, useWaitForTransactionReceipt, useConfig, usePrepareTransactionRequest, useReadContract, useConnection } from "wagmi";
+import { useIsViewOnly } from "@/hooks/use-is-view-only";
 import { BATCH_DISTRIBUTOR_CONTRACT_ADDRESS } from "@/lib/constants";
 import { BatchDistributorAbi } from "@/lib/abis/batch-distributor-abi";
 import { TransactionStatus } from "@/components/transaction-status";
@@ -45,6 +46,7 @@ export function BatchSimpleEditor({
 }: BatchEditorProps) {
   const config = useConfig();
   const connection = useConnection();
+  const isViewOnly = useIsViewOnly();
   // Resolve block explorer URL for the currently selected chain so transaction
   // hashes can link out to the correct explorer.
   const blockExplorerUrl = config.chains.find((c) => c.id === selectedChain)?.blockExplorers?.default.url;
@@ -71,6 +73,10 @@ export function BatchSimpleEditor({
   const [submitError, setSubmitError] = useState<string | null>(null);
   // Controls whether the raw transaction object preview is visible.
   const [showTxObject, setShowTxObject] = useState(false);
+  // View-only mode: separate toggles per approval action
+  const [showApproveNftTxObject, setShowApproveNftTxObject] = useState(false);
+  const [showApproveExactTxObject, setShowApproveExactTxObject] = useState(false);
+  const [showApproveUnlimitedTxObject, setShowApproveUnlimitedTxObject] = useState(false);
 
   const isNft = token?.isNft ?? false;
   const symbol = token ? token.symbol : (nativeBalance?.symbol ?? "ETH");
@@ -223,40 +229,69 @@ export function BatchSimpleEditor({
     }
   });
 
-  const simulateEnabled = showTxObject && simulatedAddresses.every((a) => !!a) && simulatedAmounts.length > 0;
+  // ── Distribution tx preparation ──────────────────────────────────────────────
+  const prepareEnabled = showTxObject && simulatedAddresses.every((a) => !!a) && simulatedAmounts.length > 0;
+  let distributionCalldata: `0x${string}` | undefined;
+  let distributionValue = 0n;
+  let distributionPrepareEnabled = false;
+  try {
+    if (isNft && token) {
+      distributionCalldata = encodeFunctionData({ abi: BatchDistributorAbi, functionName: "distributeNft", args: [token.address, { txns: simulatedAddresses.map((addr, i) => ({ recipient: addr, amount: simulatedAmounts[i] })) }] });
+      distributionValue = fee;
+      distributionPrepareEnabled = prepareEnabled;
+    } else if (token) {
+      distributionCalldata = encodeFunctionData({ abi: BatchDistributorAbi, functionName: "distributeToken", args: [token.address, { txns: simulatedAddresses.map((addr, i) => ({ recipient: addr, amount: simulatedAmounts[i] })) }] });
+      distributionValue = fee;
+      distributionPrepareEnabled = prepareEnabled && totalAmount > 0n && !needsApproval;
+    } else {
+      distributionCalldata = encodeFunctionData({ abi: BatchDistributorAbi, functionName: "distributeEther", args: [{ txns: simulatedAddresses.map((addr, i) => ({ recipient: addr, amount: simulatedAmounts[i] })) }] });
+      distributionValue = totalAmount + fee;
+      distributionPrepareEnabled = prepareEnabled && totalAmount > 0n;
+    }
+  } catch { /* encoding failed — leave calldata undefined */ }
   const {
-    data: simulatedTx,
-    isLoading: isLoadingSimulate,
-    isError: isErrorSimulate,
-  } = useSimulateContract(
-    isNft && token
-      ? {
-        address: BATCH_DISTRIBUTOR_CONTRACT_ADDRESS,
-        abi: BatchDistributorAbi,
-        functionName: "distributeNft",
-        args: [token.address, { txns: simulatedAddresses.map((addr, i) => ({ recipient: addr, amount: simulatedAmounts[i] })) }],
-        value: fee,
-        query: { enabled: simulateEnabled },
-      }
-      : token
-      ? {
-        address: BATCH_DISTRIBUTOR_CONTRACT_ADDRESS,
-        abi: BatchDistributorAbi,
-        functionName: "distributeToken",
-        args: [token.address, { txns: simulatedAddresses.map((addr, i) => ({ recipient: addr, amount: simulatedAmounts[i] })) }],
-        value: fee,
-        // Don't simulate if approval is still needed — the call would revert.
-        query: { enabled: simulateEnabled && totalAmount > 0n && !needsApproval },
-      }
-      : {
-        address: BATCH_DISTRIBUTOR_CONTRACT_ADDRESS,
-        abi: BatchDistributorAbi,
-        functionName: "distributeEther",
-        args: [{ txns: simulatedAddresses.map((addr, i) => ({ recipient: addr, amount: simulatedAmounts[i] })) }],
-        value: totalAmount + fee,
-        query: { enabled: simulateEnabled && totalAmount > 0n },
-      }
-  );
+    data: preparedTx,
+    isLoading: isLoadingPrepare,
+    isError: isErrorPrepare,
+  } = usePrepareTransactionRequest({
+    to: BATCH_DISTRIBUTOR_CONTRACT_ADDRESS,
+    data: distributionCalldata,
+    value: distributionValue,
+    chainId: selectedChain ?? undefined,
+    query: { enabled: !!distributionCalldata && distributionPrepareEnabled },
+  });
+
+  // ── View-only approval preparations ─────────────────────────────────────────
+  // Only used when isViewOnly — prepares each approve tx so the user can
+  // inspect the raw tx object and submit it from another tool.
+  const approveNftCalldata = (isNft && !!token)
+    ? encodeFunctionData({ abi: erc721Abi, functionName: "setApprovalForAll", args: [BATCH_DISTRIBUTOR_CONTRACT_ADDRESS as Address, true] })
+    : undefined;
+  const approveExactCalldata = (!isNft && !!token && totalAmount > 0n)
+    ? encodeFunctionData({ abi: erc20Abi, functionName: "approve", args: [BATCH_DISTRIBUTOR_CONTRACT_ADDRESS as Address, totalAmount] })
+    : undefined;
+  const approveUnlimitedCalldata = (!isNft && !!token)
+    ? encodeFunctionData({ abi: erc20Abi, functionName: "approve", args: [BATCH_DISTRIBUTOR_CONTRACT_ADDRESS as Address, maxUint256] })
+    : undefined;
+
+  const { data: preparedApproveNft, isLoading: isLoadingPrepareApproveNft, isError: isErrorPrepareApproveNft } = usePrepareTransactionRequest({
+    to: token?.address,
+    data: approveNftCalldata,
+    chainId: selectedChain ?? undefined,
+    query: { enabled: isViewOnly && isNft && !!token && showApproveNftTxObject && !!approveNftCalldata },
+  });
+  const { data: preparedApproveExact, isLoading: isLoadingPrepareApproveExact, isError: isErrorPrepareApproveExact } = usePrepareTransactionRequest({
+    to: token?.address,
+    data: approveExactCalldata,
+    chainId: selectedChain ?? undefined,
+    query: { enabled: isViewOnly && !isNft && !!token && showApproveExactTxObject && !!approveExactCalldata },
+  });
+  const { data: preparedApproveUnlimited, isLoading: isLoadingPrepareApproveUnlimited, isError: isErrorPrepareApproveUnlimited } = usePrepareTransactionRequest({
+    to: token?.address,
+    data: approveUnlimitedCalldata,
+    chainId: selectedChain ?? undefined,
+    query: { enabled: isViewOnly && !isNft && !!token && showApproveUnlimitedTxObject && !!approveUnlimitedCalldata },
+  });
 
   const isBalanceLoading = token ? token.isLoading : isLoadingNativeBalance;
 
@@ -459,37 +494,45 @@ export function BatchSimpleEditor({
               const canSendNft = canSend && approved;
               return (
                 <div className="flex flex-col gap-4">
-                  {/* step 1 — setApprovalForAll grants the BatchDistributor
-                      operator rights over all NFTs in this collection. The
-                      badge turns green once confirmed. */}
+                  {/* step 1 — setApprovalForAll (normal) / Request approve (view-only) */}
                   <div className="grid grid-cols-[1.25rem_1fr] gap-x-4 gap-y-2 items-start">
                     <span className={`w-5 h-5 shrink-0 border text-xs flex items-center justify-center mt-0.5 ${approved ? "border-green-500 text-green-500" : "border-muted-foreground text-muted-foreground"}`}>
                       1
                     </span>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      className="rounded-none flex-1 hover:cursor-pointer"
-                      disabled={!canApproveNft || approved}
-                      onClick={async () => {
-                        try {
-                          await approveWrite.mutateAsync({
-                            address: token.address,
-                            abi: erc721Abi,
-                            functionName: "setApprovalForAll",
-                            args: [BATCH_DISTRIBUTOR_CONTRACT_ADDRESS as Address, true],
-                          });
-                        } catch {
-                          // user rejected or tx failed — errors surfaced by wallet
-                        }
-                      }}
-                    >
-                      {isApproving && <Loader2 className="w-4 h-4 animate-spin" />}
-                      Approve for all
-                    </Button>
-                    {/* The empty <div /> keeps TransactionStatus in the content
-                        column, aligned under the button rather than the badge. */}
-                    {(approveWrite.data || approveWrite.isPending || isApproveConfirming) && (
+                    {isViewOnly ? (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="rounded-none flex-1 hover:cursor-pointer"
+                        disabled={!canSubmit}
+                        onClick={() => setShowApproveNftTxObject((prev) => !prev)}
+                      >
+                        Request setApprovalForAll
+                      </Button>
+                    ) : (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="rounded-none flex-1 hover:cursor-pointer"
+                        disabled={!canApproveNft || approved}
+                        onClick={async () => {
+                          try {
+                            await approveWrite.mutateAsync({
+                              address: token.address,
+                              abi: erc721Abi,
+                              functionName: "setApprovalForAll",
+                              args: [BATCH_DISTRIBUTOR_CONTRACT_ADDRESS as Address, true],
+                            });
+                          } catch {
+                            // user rejected or tx failed — errors surfaced by wallet
+                          }
+                        }}
+                      >
+                        {isApproving && <Loader2 className="w-4 h-4 animate-spin" />}
+                        Approve for all
+                      </Button>
+                    )}
+                    {!isViewOnly && (approveWrite.data || approveWrite.isPending || isApproveConfirming) && (
                       <>
                         <div />
                         <TransactionStatus
@@ -501,13 +544,23 @@ export function BatchSimpleEditor({
                         />
                       </>
                     )}
+                    {isViewOnly && showApproveNftTxObject && (
+                      <>
+                        <div />
+                        <TransactionObject
+                          transactionObject={preparedApproveNft ?? null}
+                          isLoading={isLoadingPrepareApproveNft}
+                          isError={isErrorPrepareApproveNft}
+                        />
+                      </>
+                    )}
                   </div>
-                  {/* step 2 — send. Disabled until approval is confirmed. */}
+                  {/* step 2 — send (normal) / Request send (view-only) */}
                   <div className="grid grid-cols-[1.25rem_1fr] gap-x-4 gap-y-2 items-start">
                     <span className={`w-5 h-5 shrink-0 border text-xs flex items-center justify-center mt-0.5 ${approved ? "border-foreground text-foreground" : "border-muted-foreground text-muted-foreground"}`}>
                       2
                     </span>
-                    <div className="grid grid-cols-2 gap-2">
+                    <div className={isViewOnly ? "flex flex-col gap-2" : "grid grid-cols-2 gap-2"}>
                       <Button
                         type="button"
                         variant="outline"
@@ -517,13 +570,15 @@ export function BatchSimpleEditor({
                       >
                         Request
                       </Button>
-                      <Button
-                        type="submit"
-                        className="rounded-none hover:cursor-pointer"
-                        disabled={!canSendNft}
-                      >
-                        {isDistributing ? <Loader2 className="w-4 h-4 animate-spin" /> : "Send batch"}
-                      </Button>
+                      {!isViewOnly && (
+                        <Button
+                          type="submit"
+                          className="rounded-none hover:cursor-pointer"
+                          disabled={!canSendNft}
+                        >
+                          {isDistributing ? <Loader2 className="w-4 h-4 animate-spin" /> : "Send batch"}
+                        </Button>
+                      )}
                     </div>
                     <div />
                     <TransactionStatus
@@ -541,11 +596,11 @@ export function BatchSimpleEditor({
             }
 
             // ── Native ETH flow ────────────────────────────────────────────────
-            // No approval step needed — just Request + Send.
+            // No approval step needed — just Request + Send (or Request only).
             if (!token) {
               return (
                 <div className="flex flex-col gap-2">
-                  <div className="grid grid-cols-2 gap-2">
+                  <div className={isViewOnly ? "flex flex-col gap-2" : "grid grid-cols-2 gap-2"}>
                     <Button
                       type="button"
                       variant="outline"
@@ -555,13 +610,15 @@ export function BatchSimpleEditor({
                     >
                       Request
                     </Button>
-                    <Button
-                      type="submit"
-                      className="rounded-none hover:cursor-pointer"
-                      disabled={!canSend}
-                    >
-                      {isDistributing ? <Loader2 className="w-4 h-4 animate-spin" /> : "Send batch"}
-                    </Button>
+                    {!isViewOnly && (
+                      <Button
+                        type="submit"
+                        className="rounded-none hover:cursor-pointer"
+                        disabled={!canSend}
+                      >
+                        {isDistributing ? <Loader2 className="w-4 h-4 animate-spin" /> : "Send batch"}
+                      </Button>
+                    )}
                   </div>
                   <TransactionStatus
                     isPending={writeContract.isPending}
@@ -584,61 +641,80 @@ export function BatchSimpleEditor({
 
             return (
               <div className="flex flex-col gap-4">
-                {/* step 1 — approve. Badge turns green once allowance covers
-                    the total, regardless of which approve variant was used. */}
+                {/* step 1 — approve (normal) / Request approve (view-only) */}
                 <div className="grid grid-cols-[1.25rem_1fr] gap-x-4 gap-y-2 items-start">
                   <span className={`w-5 h-5 shrink-0 border text-xs flex items-center justify-center mt-0.5 ${isAllowanceSufficient ? "border-green-500 text-green-500" : "border-muted-foreground text-muted-foreground"}`}>
                     1
                   </span>
                   <div className="flex flex-row gap-2">
-                    {/* Exact approval: sets allowance to exactly the current
-                        totalAmount. Safer but requires re-approval if the
-                        amount changes. */}
-                    <Button
-                      type="button"
-                      variant="outline"
-                      className="rounded-none flex-1 hover:cursor-pointer"
-                      disabled={!canApprove || isAllowanceSufficient}
-                      onClick={async () => {
-                        try {
-                          await approveWrite.mutateAsync({
-                            address: token.address,
-                            abi: erc20Abi,
-                            functionName: "approve",
-                            args: [BATCH_DISTRIBUTOR_CONTRACT_ADDRESS as Address, totalAmount],
-                          });
-                        } catch {
-                          // user rejected or tx failed — errors surfaced by wallet
-                        }
-                      }}
-                    >
-                      {isApproving && <Loader2 className="w-4 h-4 animate-spin" />}
-                      Approve exact
-                    </Button>
-                    {/* Unlimited approval: sets allowance to maxUint256.
-                        Convenient for repeated use but grants broader access. */}
-                    <Button
-                      type="button"
-                      variant="outline"
-                      className="rounded-none flex-1 hover:cursor-pointer"
-                      disabled={!canApprove}
-                      onClick={async () => {
-                        try {
-                          await approveWrite.mutateAsync({
-                            address: token.address,
-                            abi: erc20Abi,
-                            functionName: "approve",
-                            args: [BATCH_DISTRIBUTOR_CONTRACT_ADDRESS as Address, maxUint256],
-                          });
-                        } catch {
-                          // user rejected or tx failed — errors surfaced by wallet
-                        }
-                      }}
-                    >
-                      Approve unlimited
-                    </Button>
+                    {isViewOnly ? (
+                      <>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="rounded-none flex-1 hover:cursor-pointer"
+                          disabled={!canSubmit}
+                          onClick={() => setShowApproveExactTxObject((prev) => !prev)}
+                        >
+                          Request exact approval
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="rounded-none flex-1 hover:cursor-pointer"
+                          disabled={!canSubmit}
+                          onClick={() => setShowApproveUnlimitedTxObject((prev) => !prev)}
+                        >
+                          Request unlimited approval
+                        </Button>
+                      </>
+                    ) : (
+                      <>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="rounded-none flex-1 hover:cursor-pointer"
+                          disabled={!canApprove || isAllowanceSufficient}
+                          onClick={async () => {
+                            try {
+                              await approveWrite.mutateAsync({
+                                address: token.address,
+                                abi: erc20Abi,
+                                functionName: "approve",
+                                args: [BATCH_DISTRIBUTOR_CONTRACT_ADDRESS as Address, totalAmount],
+                              });
+                            } catch {
+                              // user rejected or tx failed — errors surfaced by wallet
+                            }
+                          }}
+                        >
+                          {isApproving && <Loader2 className="w-4 h-4 animate-spin" />}
+                          Approve exact
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="rounded-none flex-1 hover:cursor-pointer"
+                          disabled={!canApprove}
+                          onClick={async () => {
+                            try {
+                              await approveWrite.mutateAsync({
+                                address: token.address,
+                                abi: erc20Abi,
+                                functionName: "approve",
+                                args: [BATCH_DISTRIBUTOR_CONTRACT_ADDRESS as Address, maxUint256],
+                              });
+                            } catch {
+                              // user rejected or tx failed — errors surfaced by wallet
+                            }
+                          }}
+                        >
+                          Approve unlimited
+                        </Button>
+                      </>
+                    )}
                   </div>
-                  {(approveWrite.data || approveWrite.isPending || isApproveConfirming) && (
+                  {!isViewOnly && (approveWrite.data || approveWrite.isPending || isApproveConfirming) && (
                     <>
                       <div />
                       <TransactionStatus
@@ -650,14 +726,35 @@ export function BatchSimpleEditor({
                       />
                     </>
                   )}
+                  {isViewOnly && (showApproveExactTxObject || showApproveUnlimitedTxObject) && (
+                    <>
+                      <div />
+                      <div className="flex flex-col gap-2">
+                        {showApproveExactTxObject && (
+                          <TransactionObject
+                            transactionObject={preparedApproveExact ?? null}
+                            isLoading={isLoadingPrepareApproveExact}
+                            isError={isErrorPrepareApproveExact}
+                          />
+                        )}
+                        {showApproveUnlimitedTxObject && (
+                          <TransactionObject
+                            transactionObject={preparedApproveUnlimited ?? null}
+                            isLoading={isLoadingPrepareApproveUnlimited}
+                            isError={isErrorPrepareApproveUnlimited}
+                          />
+                        )}
+                      </div>
+                    </>
+                  )}
                 </div>
 
-                {/* step 2 — send. Disabled until allowance is sufficient. */}
+                {/* step 2 — send (normal) / Request send (view-only) */}
                 <div className="grid grid-cols-[1.25rem_1fr] gap-x-4 gap-y-2 items-start">
                   <span className={`w-5 h-5 shrink-0 border text-xs flex items-center justify-center mt-0.5 ${isAllowanceSufficient ? "border-foreground text-foreground" : "border-muted-foreground text-muted-foreground"}`}>
                     2
                   </span>
-                  <div className="grid grid-cols-2 gap-2">
+                  <div className={isViewOnly ? "flex flex-col gap-2" : "grid grid-cols-2 gap-2"}>
                     <Button
                       type="button"
                       variant="outline"
@@ -667,13 +764,15 @@ export function BatchSimpleEditor({
                     >
                       Request
                     </Button>
-                    <Button
-                      type="submit"
-                      className="rounded-none hover:cursor-pointer"
-                      disabled={!canSendToken}
-                    >
-                      {isDistributing ? <Loader2 className="w-4 h-4 animate-spin" /> : "Send batch"}
-                    </Button>
+                    {!isViewOnly && (
+                      <Button
+                        type="submit"
+                        className="rounded-none hover:cursor-pointer"
+                        disabled={!canSendToken}
+                      >
+                        {isDistributing ? <Loader2 className="w-4 h-4 animate-spin" /> : "Send batch"}
+                      </Button>
+                    )}
                   </div>
                   <div />
                   <TransactionStatus
@@ -696,9 +795,9 @@ export function BatchSimpleEditor({
             value, and other fields from the simulated transaction. */}
         {showTxObject && (
           <TransactionObject
-            transactionObject={simulatedTx?.request ?? null}
-            isLoading={isLoadingSimulate}
-            isError={isErrorSimulate}
+            transactionObject={preparedTx ?? null}
+            isLoading={isLoadingPrepare}
+            isError={isErrorPrepare}
           />
         )}
       </div>

@@ -13,7 +13,7 @@ import {
   Quote,
   Pencil,
 } from "lucide-react";
-import { type Address, erc20Abi, formatUnits, parseUnits, maxUint256 } from "viem";
+import { type Address, type Hash, erc20Abi, encodeFunctionData, formatUnits, parseUnits, maxUint256 } from "viem";
 import { fetchZfiQuote, ZFI_ETH, type ZfiQuoteResponse } from "@/lib/swap-providers/zfi";
 import { defaultSlippage } from "@/lib/slippage";
 import {
@@ -23,7 +23,9 @@ import {
   useCapabilities,
   useWriteContract,
   useSendTransaction,
+  useSendCalls,
   useWaitForTransactionReceipt,
+  useWaitForCallsStatus,
   useEstimateGas,
   useGasPrice,
 } from "wagmi";
@@ -298,6 +300,53 @@ function SwapForm() {
     });
   }
 
+  // ── Atomic batch swap (EIP-5792) ──────────────────────────────────────────
+  const sendCalls = useSendCalls();
+
+  const { data: batchCallsStatus } = useWaitForCallsStatus({
+    id: sendCalls.data?.id ?? "",
+    pollingInterval: 1000,
+    query: { enabled: !!sendCalls.data },
+  });
+
+  const isBatchConfirming =
+    !!sendCalls.data &&
+    batchCallsStatus?.status !== "success" &&
+    batchCallsStatus?.status !== "failure";
+  const isBatchConfirmed = batchCallsStatus?.status === "success";
+  const batchTxHash = batchCallsStatus?.receipts?.at(-1)?.transactionHash as Hash | undefined;
+
+  function handleSwapAtomic() {
+    const tx = zfiQuery.data?.tx;
+    if (!tx || !approvalTarget || !parsedAmountIn) return;
+    sendCalls.mutate({
+      calls: [
+        {
+          to: tokenIn as Address,
+          data: encodeFunctionData({
+            abi: erc20Abi,
+            functionName: "approve",
+            args: [approvalTarget as Address, parsedAmountIn],
+          }),
+        },
+        {
+          to: tx.to as Address,
+          data: tx.data as `0x${string}`,
+          value: BigInt(tx.value),
+        },
+      ],
+      chainId: effectiveChain ?? undefined,
+    });
+  }
+
+  function handleSwapDispatch() {
+    if (supportsAtomicBatch && !isNativeTokenIn) {
+      handleSwapAtomic();
+    } else {
+      handleSwap();
+    }
+  }
+
   // ── Gas fee ──────────────────────────────────────────────────────────────
   const zfiTx = zfiQuery.data?.tx;
 
@@ -319,72 +368,6 @@ function SwapForm() {
       ? formatUnits(gasEstimate * gasPrice, 18)
       : null;
 
-  // const {
-  //   data: tokenInBalanceData,
-  //   isLoading: isLoadingTokenInBalance,
-  //   refetch: refetchTokenInBalance,
-  // } = useReadContracts({
-  //   contracts: [
-  //     {
-  //       address: tokenIn as Address,
-  //       abi: erc20Abi,
-  //       functionName: "balanceOf",
-  //       args: [connection.address as Address],
-  //       chainId: connection.chain?.id,
-  //     },
-  //   ],
-  //   query: { enabled: isBalanceQueryEnabled && !!tokenIn },
-  // });
-
-  // const {
-  //   data: tokenOutBalanceData,
-  //   isLoading: isLoadingTokenOutBalance,
-  // } = useReadContracts({
-  //   contracts: [
-  //     {
-  //       address: tokenOut as Address,
-  //       abi: erc20Abi,
-  //       functionName: "balanceOf",
-  //       args: [connection.address as Address],
-  //       chainId: connection.chain?.id,
-  //     },
-  //   ],
-  //   query: { enabled: isBalanceQueryEnabled && !!tokenOut },
-  // });
-
-  // const tokenInBalance = tokenInBalanceData?.[0]?.result as bigint | undefined;
-  // const tokenOutBalance = tokenOutBalanceData?.[0]?.result as bigint | undefined;
-
-  // let parsedAmountIn: bigint | undefined;
-  // try {
-  //   parsedAmountIn = amountIn ? parseUnits(amountIn, tokenInDecimals) : undefined;
-  // } catch {
-  //   parsedAmountIn = undefined;
-  // }
-
-  // const {
-  //   data: swapTxHash,
-  //   isPending: isPendingSwap,
-  //   reset: resetSwap,
-  // } = useWriteContract();
-
-  // const {
-  //   isLoading: isConfirmingSwap,
-  //   isSuccess: isConfirmedSwap,
-  // } = useWaitForTransactionReceipt({
-  //   hash: swapTxHash,
-  //   chainId: selectedChain || undefined,
-  // });
-
-  // const selectedChainBlockExplorer = config.chains.find(
-  //   (chain) => chain.id.toString() === selectedChain?.toString()
-  // )?.blockExplorers?.default.url;
-
-  // function handleReset() {
-  //   resetSwap();
-  //   form.reset();
-  // }
-
   function handleReset() {
     form.reset();
   }
@@ -394,7 +377,7 @@ function SwapForm() {
     handleApproveExact,
     handleApproveUnlimited,
     handleRevoke,
-    handleSwap,
+    handleSwap: handleSwapDispatch,
     refetchQuote: () => void zfiQuery.refetch(),
     isSubmitting: () => form.state.isSubmitting,
   });
@@ -404,7 +387,7 @@ function SwapForm() {
       handleApproveExact,
       handleApproveUnlimited,
       handleRevoke,
-      handleSwap,
+      handleSwap: handleSwapDispatch,
       refetchQuote: () => void zfiQuery.refetch(),
       isSubmitting: () => form.state.isSubmitting,
     };
@@ -692,30 +675,34 @@ function SwapForm() {
           {!isNativeTokenIn && (
             <div className="flex flex-row items-center justify-between text-xs">
               <p className="text-muted-foreground">Approval</p>
-              <div className="flex flex-row items-center gap-2">
-                {isLoadingAllowance ? (
-                  <Loader2 className="w-3 h-3 animate-spin text-muted-foreground" />
-                ) : (
-                  <p>{formattedAllowance ?? "—"}</p>
-                )}
-                {currentAllowance !== undefined && currentAllowance > 0n && (
-                  <Button
-                    type="button"
-                    size="xs"
-                    onClick={handleRevoke}
-                    disabled={isRevokePending || isRevokeConfirming || isRevokeConfirmed}
-                    className="h-auto rounded-none px-1.5 py-0.5 text-xs hover:cursor-pointer bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                  >
-                    {isRevokePending || isRevokeConfirming ? (
-                      <Loader2 className="w-3 h-3 animate-spin" />
-                    ) : isRevokeConfirmed ? (
-                      <Check className="w-3 h-3" />
-                    ) : (
-                      <>Revoke <Kbd className="bg-destructive/10 text-destructive-foreground h-3.5 min-w-3.5 text-[10px]">V</Kbd></>
-                    )}
-                  </Button>
-                )}
-              </div>
+              {supportsAtomicBatch ? (
+                <p className="text-green-500">Atomic batch</p>
+              ) : (
+                <div className="flex flex-row items-center gap-2">
+                  {isLoadingAllowance ? (
+                    <Loader2 className="w-3 h-3 animate-spin text-muted-foreground" />
+                  ) : (
+                    <p>{formattedAllowance ?? "—"}</p>
+                  )}
+                  {currentAllowance !== undefined && currentAllowance > 0n && (
+                    <Button
+                      type="button"
+                      size="xs"
+                      onClick={handleRevoke}
+                      disabled={isRevokePending || isRevokeConfirming || isRevokeConfirmed}
+                      className="h-auto rounded-none px-1.5 py-0.5 text-xs hover:cursor-pointer bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                    >
+                      {isRevokePending || isRevokeConfirming ? (
+                        <Loader2 className="w-3 h-3 animate-spin" />
+                      ) : isRevokeConfirmed ? (
+                        <Check className="w-3 h-3" />
+                      ) : (
+                        <>Revoke <Kbd className="bg-destructive/10 text-destructive-foreground h-3.5 min-w-3.5 text-[10px]">V</Kbd></>
+                      )}
+                    </Button>
+                  )}
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -725,32 +712,35 @@ function SwapForm() {
           <form.Subscribe selector={(state) => [state.canSubmit]}>
             {([canSubmit]) => {
               const isApproving = isApprovePending || isApproveConfirming;
-              const isSwapping = isSwapPending || isSwapConfirming;
+              const isSwapping =
+                isSwapPending || isSwapConfirming || sendCalls.isPending || isBatchConfirming;
               const canSwap =
                 canSubmit &&
                 !!zfiQuery.data &&
-                isAllowanceSufficient &&
+                (isAllowanceSufficient || supportsAtomicBatch) &&
                 !isSwapping;
               const canApprove = canSubmit && !!approvalTarget && !isApproving;
 
               if (isNativeTokenIn || supportsAtomicBatch) {
+                const isBatch = supportsAtomicBatch && !isNativeTokenIn;
                 return (
                   <div className="flex flex-col gap-2">
                     <Button
                       className="hover:cursor-pointer rounded-none w-full"
                       type="button"
-                      onClick={handleSwap}
+                      onClick={isBatch ? handleSwapAtomic : handleSwap}
                       disabled={!canSwap}
                     >
                       {isSwapping && <Loader2 className="w-4 h-4 animate-spin" />}
                       SWAP <Kbd>S</Kbd>
                     </Button>
                     <TransactionStatus
-                      isPending={isSwapPending}
-                      isConfirming={isSwapConfirming}
-                      isConfirmed={isSwapConfirmed}
-                      txHash={swapTxHash}
+                      isPending={isBatch ? sendCalls.isPending : isSwapPending}
+                      isConfirming={isBatch ? isBatchConfirming : isSwapConfirming}
+                      isConfirmed={isBatch ? isBatchConfirmed : isSwapConfirmed}
+                      txHash={isBatch ? batchTxHash : swapTxHash}
                       blockExplorerUrl={connection.chain?.blockExplorers?.default.url}
+                      signedLabel={isBatch ? "Bundle submitted" : undefined}
                     />
                   </div>
                 );

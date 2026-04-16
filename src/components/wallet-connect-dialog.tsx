@@ -13,14 +13,23 @@
 //   - Disconnect button
 
 import { useState } from "react";
-import { useConnection, useConnect, useConnectors, useDisconnect } from "wagmi";
+import { useConnection, useConnect, useConnectors, useDisconnect, useEnsAddress } from "wagmi";
 import { isAddress } from "viem";
-import { Check, Copy, EllipsisVertical, View } from "lucide-react";
+import { normalize } from "viem/ens";
+import { useForm, useStore, type AnyFieldApi } from "@tanstack/react-form";
+import { Check, Copy, EllipsisVertical, Loader2, Search, View } from "lucide-react";
 import { setImpersonatorAddress } from "@/lib/impersonator-connector";
 import { truncateAddress } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
+import { Skeleton } from "@/components/ui/skeleton";
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupInput,
+} from "@/components/ui/input-group";
+import QrScannerButton from "@/components/qr-scanner-button";
 import {
   Dialog,
   DialogContent,
@@ -60,18 +69,52 @@ function removeFromHistory(address: string): string[] {
 export function WalletConnectButton() {
   const connection = useConnection();
   const connectors = useConnectors();
-  const { connect, isPending: isConnecting } = useConnect();
-  const { disconnect } = useDisconnect();
+  const connect = useConnect();
+  const disconnect = useDisconnect();
 
   const [open, setOpen] = useState(false);
-  const [impersonatorInput, setImpersonatorInput] = useState("");
-  const [impersonatorError, setImpersonatorError] = useState("");
   const [history, setHistory] = useState<string[]>(() => loadHistory());
   // Tracks which history row has its delete menu open.
   const [menuOpenFor, setMenuOpenFor] = useState<string | null>(null);
+  // Connection-level error (connector not available, wallet rejected, etc.)
+  const [connectError, setConnectError] = useState<string | null>(null);
 
   const isImpersonator = connection.connector?.id === "impersonator";
   const [copied, setCopied] = useState(false);
+
+  // ── TanStack Form for the impersonator address input ──────────────────────
+  const impersonatorForm = useForm({
+    defaultValues: { address: "" },
+    onSubmit: ({ value }) => {
+      const trimmed = value.address.trim();
+      if (trimmed.endsWith(".eth")) {
+        if (!ensAddress) {
+          // ENS not yet resolved — trigger lookup first
+          void refetchEnsAddress();
+          return;
+        }
+        connectAsAddress(ensAddress);
+      } else {
+        connectAsAddress(trimmed);
+      }
+    },
+  });
+
+  // Watch address field reactively for ENS lookup
+  const addressInput = useStore(impersonatorForm.store, (s) => s.values.address);
+
+  // ── ENS lookup ────────────────────────────────────────────────────────────
+  const isEnsName = addressInput.trim().endsWith(".eth") && addressInput.trim().length > 4;
+  const {
+    data: ensAddress,
+    isLoading: isLoadingEnsAddress,
+    isError: isErrorEnsAddress,
+    refetch: refetchEnsAddress,
+  } = useEnsAddress({
+    chainId: 1,
+    name: isEnsName ? normalize(addressInput.trim()) : undefined,
+    query: { enabled: false },
+  });
 
   function handleCopyAddress() {
     if (!connection.address) return;
@@ -81,39 +124,30 @@ export function WalletConnectButton() {
   }
 
   // ── connectAsAddress ──────────────────────────────────────────────────────
-  // Core connect logic used by both the input form and history quick-select.
-  // Saves the address to history on success.
+  // Core connect logic used by both the form submit and history quick-select.
   function connectAsAddress(addr: string) {
     const connector = connectors.find((c) => c.id === "impersonator");
     if (!connector) {
-      setImpersonatorError("Impersonator connector not available");
+      setConnectError("Impersonator connector not available");
       return;
     }
+    setConnectError(null);
     setImpersonatorAddress(addr);
-    connect(
+    connect.mutate(
       { connector },
       {
         onSuccess: () => {
           setHistory(saveToHistory(addr));
           setOpen(false);
-          setImpersonatorInput("");
-          setImpersonatorError("");
+          impersonatorForm.reset();
+          setConnectError(null);
           setMenuOpenFor(null);
         },
         onError: (err) => {
-          setImpersonatorError(err.message);
+          setConnectError(err.message);
         },
       }
     );
-  }
-
-  function handleImpersonatorConnect() {
-    const trimmed = impersonatorInput.trim();
-    if (!isAddress(trimmed)) {
-      setImpersonatorError("Invalid Ethereum address");
-      return;
-    }
-    connectAsAddress(trimmed);
   }
 
   function handleRemove(addr: string) {
@@ -122,8 +156,8 @@ export function WalletConnectButton() {
   }
 
   function handleClose() {
-    setImpersonatorInput("");
-    setImpersonatorError("");
+    impersonatorForm.reset();
+    setConnectError(null);
     setMenuOpenFor(null);
   }
 
@@ -191,7 +225,7 @@ export function WalletConnectButton() {
               size="sm"
               className="rounded-none w-full"
               onClick={() => {
-                disconnect();
+                disconnect.mutate({});
                 setOpen(false);
               }}
             >
@@ -215,10 +249,10 @@ export function WalletConnectButton() {
                   <button
                     key={connector.uid}
                     type="button"
-                    disabled={isConnecting}
+                    disabled={connect.isPending}
                     className="flex items-center gap-2 px-2.5 py-2 text-xs text-left border border-input hover:bg-accent transition-colors disabled:opacity-50 hover:cursor-pointer"
                     onClick={() => {
-                      connect({ connector });
+                      connect.mutate({ connector });
                       setOpen(false);
                     }}
                   >
@@ -247,7 +281,7 @@ export function WalletConnectButton() {
                       {/* Quick-select: click row to connect immediately */}
                       <button
                         type="button"
-                        disabled={isConnecting}
+                        disabled={connect.isPending}
                         className="flex-1 px-2.5 py-1.5 text-left text-xs font-mono hover:bg-accent transition-colors disabled:opacity-50 hover:cursor-pointer truncate"
                         onClick={() => {
                           if (menuOpenFor === addr) {
@@ -289,38 +323,115 @@ export function WalletConnectButton() {
                 </div>
               )}
 
-              {/* Address input + connect */}
-              <div className="flex gap-1.5">
-                <Input
-                  placeholder="0x..."
-                  value={impersonatorInput}
-                  onChange={(e) => {
-                    setImpersonatorInput(e.target.value);
-                    setImpersonatorError("");
+              {/* ── Address input with ENS + QR ───────────────────────────── */}
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  impersonatorForm.handleSubmit();
+                }}
+                className="flex flex-col gap-1.5"
+              >
+                <impersonatorForm.Field
+                  name="address"
+                  validators={{
+                    onChange: ({ value }) => {
+                      if (!value.trim()) return "Please enter an address or ENS";
+                      const trimmed = value.trim();
+                      if (!trimmed.endsWith(".eth") && !isAddress(trimmed)) {
+                        return "Invalid address or ENS name";
+                      }
+                      return undefined;
+                    },
                   }}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") handleImpersonatorConnect();
-                  }}
-                  className="font-mono"
-                  aria-invalid={!!impersonatorError}
-                />
+                >
+                  {(field) => (
+                    <>
+                      <InputGroup>
+                        <InputGroupInput
+                          id={field.name}
+                          name={field.name}
+                          value={field.state.value}
+                          onChange={(e) => field.handleChange(e.target.value)}
+                          placeholder="Address (0x...) or ENS (.eth)"
+                          className="font-mono text-xs"
+                          aria-invalid={field.state.meta.isTouched && !field.state.meta.isValid}
+                        />
+                        <InputGroupAddon align="inline-end">
+                          <InputGroupButton
+                            type="button"
+                            aria-label="ENS lookup"
+                            size="icon-xs"
+                            onClick={() => refetchEnsAddress()}
+                            className="hover:cursor-pointer"
+                            disabled={!isEnsName}
+                          >
+                            {isLoadingEnsAddress ? (
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            ) : (
+                              <Search className="w-3.5 h-3.5" />
+                            )}
+                          </InputGroupButton>
+                          <QrScannerButton
+                            onScan={(addr) => field.handleChange(addr)}
+                          />
+                        </InputGroupAddon>
+                      </InputGroup>
+                      <ImpersonatorAddressFieldInfo
+                        field={field}
+                        ensAddress={ensAddress}
+                        isLoadingEnsAddress={isLoadingEnsAddress}
+                        isErrorEnsAddress={isErrorEnsAddress}
+                      />
+                    </>
+                  )}
+                </impersonatorForm.Field>
                 <Button
+                  type="submit"
                   variant="outline"
                   size="sm"
-                  className="rounded-none shrink-0"
-                  disabled={isConnecting || !impersonatorInput}
-                  onClick={handleImpersonatorConnect}
+                  className="rounded-none w-full hover:cursor-pointer"
+                  disabled={connect.isPending}
                 >
-                  View
+                  {connect.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : "View"}
                 </Button>
-              </div>
-              {impersonatorError && (
-                <span className="text-xs text-destructive">{impersonatorError}</span>
-              )}
+                {connectError && (
+                  <span className="text-xs text-destructive">{connectError}</span>
+                )}
+              </form>
             </div>
           </>
         )}
       </DialogContent>
     </Dialog>
   );
+}
+
+// ── ImpersonatorAddressFieldInfo ──────────────────────────────────────────────
+// Shows field validation state, ENS resolution result, and ENS errors.
+
+function ImpersonatorAddressFieldInfo({
+  field,
+  ensAddress,
+  isLoadingEnsAddress,
+  isErrorEnsAddress,
+}: {
+  field: AnyFieldApi;
+  ensAddress?: `0x${string}` | null;
+  isLoadingEnsAddress?: boolean;
+  isErrorEnsAddress?: boolean;
+}) {
+  if (!field.state.meta.isTouched) return null;
+  if (field.state.meta.isTouched && !field.state.meta.isValid) {
+    return (
+      <em className="text-xs text-destructive">
+        {field.state.meta.errors.join(", ")}
+      </em>
+    );
+  }
+  if (isLoadingEnsAddress) return <Skeleton className="w-32 h-3" />;
+  if (isErrorEnsAddress) return <em className="text-xs text-destructive">Failed to resolve ENS</em>;
+  if (ensAddress) return <em className="text-xs text-green-500">{ensAddress}</em>;
+  if (ensAddress === null) return <em className="text-xs text-destructive">ENS name not found</em>;
+  return <em className="text-xs text-green-500">ok!</em>;
 }

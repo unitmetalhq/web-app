@@ -12,6 +12,7 @@ export function TransactionStatus({
   blockExplorerUrl,
   error,
   onClearError,
+  signedLabel,
 }: {
   isPending: boolean;
   isConfirming: boolean;
@@ -20,6 +21,7 @@ export function TransactionStatus({
   blockExplorerUrl: string | undefined;
   error?: string | null;
   onClearError?: () => void;
+  signedLabel?: string;
 }) {
   const [copied, setCopied] = useState(false);
 
@@ -58,7 +60,7 @@ export function TransactionStatus({
             ) : isConfirming || isConfirmed || txHash ? (
               <>
                 <Check className="w-4 h-4 shrink-0" />
-                <p>Signed</p>
+                <p>{signedLabel ?? "Signed"}</p>
               </>
             ) : (
               <>
@@ -69,43 +71,51 @@ export function TransactionStatus({
           </div>
           {/* Row 2: Transaction status */}
           <div className="flex flex-row gap-2 items-center">
-            {isConfirmed && txHash ? (
+            {isConfirmed ? (
               <>
                 <Check className="w-4 h-4 shrink-0" />
                 <p>Confirmed</p>
-                <a
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="underline underline-offset-4 hover:cursor-pointer"
-                  href={blockExplorerUrl ? `${blockExplorerUrl}/tx/${txHash}` : undefined}
-                >
-                  <div className="flex flex-row gap-1 items-center">
-                    {truncateHash(txHash)}
-                    <ExternalLink className="w-3 h-3" />
-                  </div>
-                </a>
-                <button type="button" onClick={(e) => handleCopy(e, txHash)} className="hover:opacity-70">
-                  {copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
-                </button>
+                {txHash && (
+                  <>
+                    <a
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="underline underline-offset-4 hover:cursor-pointer"
+                      href={blockExplorerUrl ? `${blockExplorerUrl}/tx/${txHash}` : undefined}
+                    >
+                      <div className="flex flex-row gap-1 items-center">
+                        {truncateHash(txHash)}
+                        <ExternalLink className="w-3 h-3" />
+                      </div>
+                    </a>
+                    <button type="button" onClick={(e) => handleCopy(e, txHash)} className="hover:opacity-70">
+                      {copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                    </button>
+                  </>
+                )}
               </>
-            ) : isConfirming && txHash ? (
+            ) : isConfirming ? (
               <>
                 <Loader2 className="w-4 h-4 animate-spin shrink-0" />
                 <p>Confirming</p>
-                <a
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="underline underline-offset-4 hover:cursor-pointer"
-                  href={blockExplorerUrl ? `${blockExplorerUrl}/tx/${txHash}` : undefined}
-                >
-                  <div className="flex flex-row gap-1 items-center">
-                    {truncateHash(txHash)}
-                    <ExternalLink className="w-3 h-3" />
-                  </div>
-                </a>
-                <button type="button" onClick={(e) => handleCopy(e, txHash)} className="hover:opacity-70 hover:cursor-pointer">
-                  {copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
-                </button>
+                {txHash && (
+                  <>
+                    <a
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="underline underline-offset-4 hover:cursor-pointer"
+                      href={blockExplorerUrl ? `${blockExplorerUrl}/tx/${txHash}` : undefined}
+                    >
+                      <div className="flex flex-row gap-1 items-center">
+                        {truncateHash(txHash)}
+                        <ExternalLink className="w-3 h-3" />
+                      </div>
+                    </a>
+                    <button type="button" onClick={(e) => handleCopy(e, txHash)} className="hover:opacity-70 hover:cursor-pointer">
+                      {copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                    </button>
+                  </>
+                )}
               </>
             ) : (
               <>

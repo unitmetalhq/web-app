@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Input } from "@/components/ui/input";
+import { NftPickerDialog } from "@/components/nft-picker-dialog";
 import { erc721Abi, isAddress, type Address } from "viem";
 import {
   useBalance,
@@ -92,12 +93,21 @@ export default function SendBatchErc721TokenForm({
 
       {/* contract address input */}
       <div className="flex flex-col gap-1">
-        <Input
-          value={tokenInput}
-          onChange={(e) => setTokenInput(e.target.value)}
-          placeholder="ERC721 contract address (0x...)"
-          className="rounded-none h-8 text-xs font-mono"
-        />
+        {/* grid: [picker button | address input] */}
+        <div className="grid grid-cols-[auto_1fr] gap-2 items-center">
+          <NftPickerDialog
+            contractValue={tokenInput}
+            tokenIdValue=""
+            onSelect={(addr) => setTokenInput(addr)}
+            chainId={selectedChain ?? undefined}
+          />
+          <Input
+            value={tokenInput}
+            onChange={(e) => setTokenInput(e.target.value)}
+            placeholder="ERC721 contract address (0x...)"
+            className="rounded-none h-8 text-xs font-mono"
+          />
+        </div>
         {tokenInput && !tokenAddress && <span className="text-xs text-red-400">Invalid address</span>}
         {tokenAddress && isLoadingContract && <Skeleton className="w-32 h-4" />}
         {tokenAddress && !isLoadingContract && contractName && (

@@ -1,9 +1,9 @@
 import { useState } from "react";
 import { useAtom } from "jotai";
-import { customTokensAtom } from "@/lib/atoms/custom-token-list";
-import type { CustomToken } from "@/lib/atoms/custom-token-list";
-import { customNftsAtom } from "@/lib/atoms/custom-nft-list";
-import type { NftCollection } from "@/lib/atoms/custom-nft-list";
+import { customTokensAtom } from "@/atoms/customTokensAtom";
+import type { TokenListToken } from "@/atoms/customTokensAtom";
+import { customNftsAtom } from "@/atoms/customNftsAtom";
+import type { NftCollection } from "@/atoms/customNftsAtom";
 import { useBalance, useConfig, useConnection, useReadContracts } from "wagmi";
 import { useQuery } from "@tanstack/react-query";
 import { formatUnits, erc20Abi } from "viem";
@@ -18,7 +18,7 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
 } from "@/components/ui/dropdown-menu";
-import AddCustomToken from "@/components/add-custom-token";
+import AddTokenListToken from "@/components/add-custom-token";
 import AddCustomNft from "@/components/add-custom-nft";
 
 const ETH_SENTINEL = "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
@@ -43,14 +43,14 @@ const erc721EnumerableAbi = [
   },
 ] as const;
 
-type TokenWithMeta = CustomToken & { isVerified: boolean };
+type TokenWithMeta = TokenListToken & { isVerified: boolean };
 type NftCollectionEntry = NftCollection & { isVerified: boolean };
 type OwnedNft = { collection: NftCollectionEntry; tokenId: bigint };
 
 export default function BalancesComponent() {
   const config = useConfig();
   const connection = useConnection();
-  const [customTokens, setCustomTokens] = useAtom(customTokensAtom);
+  const [customTokens, setTokenListTokens] = useAtom(customTokensAtom);
   const [customNfts, setCustomNfts] = useAtom(customNftsAtom);
   const [showAddTokenForm, setShowAddTokenForm] = useState(false);
   const [showAddNftForm, setShowAddNftForm] = useState(false);
@@ -69,25 +69,25 @@ export default function BalancesComponent() {
     queryFn: async () => {
       const res = await fetch("/token-list.json");
       if (!res.ok) throw new Error("Failed to fetch token list");
-      return res.json() as Promise<{ tokens: CustomToken[] }>;
+      return res.json() as Promise<{ tokens: TokenListToken[] }>;
     },
     staleTime: Infinity,
   });
 
-  const listTokens: CustomToken[] = chainId
+  const listTokens: TokenListToken[] = chainId
     ? (tokenList?.tokens.filter(
         (t) => t.chainId === chainId && t.address.toLowerCase() !== ETH_SENTINEL
       ) ?? [])
     : [];
 
   const customForChain = customTokens.filter((t) => t.chainId === chainId);
-  const dedupedCustomTokens = customForChain.filter(
+  const dedupedTokenListTokens = customForChain.filter(
     (ct) => !listTokens.some((lt) => lt.address.toLowerCase() === ct.address.toLowerCase())
   );
 
   const allTokens: TokenWithMeta[] = [
     ...listTokens.map((t) => ({ ...t, isVerified: true })),
-    ...dedupedCustomTokens.map((t) => ({ ...t, isVerified: false })),
+    ...dedupedTokenListTokens.map((t) => ({ ...t, isVerified: false })),
   ];
 
   // ── Token balances ──────────────────────────────────────────────────────────
@@ -191,8 +191,8 @@ export default function BalancesComponent() {
 
   // ── Handlers ────────────────────────────────────────────────────────────────
 
-  function handleRemoveCustomToken(tokenAddress: string) {
-    setCustomTokens((prev) => prev.filter((t) => t.address.toLowerCase() !== tokenAddress.toLowerCase()));
+  function handleRemoveTokenListToken(tokenAddress: string) {
+    setTokenListTokens((prev) => prev.filter((t) => t.address.toLowerCase() !== tokenAddress.toLowerCase()));
   }
 
   function handleRemoveCustomNft(collectionAddress: string) {
@@ -283,7 +283,7 @@ export default function BalancesComponent() {
                           isError={raw?.status === "failure"}
                           isVerified={token.isVerified}
                           onRefresh={refetchTokens}
-                          onRemove={token.isVerified ? undefined : () => handleRemoveCustomToken(token.address)}
+                          onRemove={token.isVerified ? undefined : () => handleRemoveTokenListToken(token.address)}
                         />
                       );
                     })}
@@ -295,10 +295,10 @@ export default function BalancesComponent() {
               <div className="px-4">
                 <div className="border-t border-border mb-3" />
                 {showAddTokenForm ? (
-                  <AddCustomToken
+                  <AddTokenListToken
                     chainId={chainId ?? 1}
                     onAdd={(token) => {
-                      setCustomTokens((prev) => [...prev, token]);
+                      setTokenListTokens((prev) => [...prev, token]);
                       setShowAddTokenForm(false);
                     }}
                     onCancel={() => setShowAddTokenForm(false)}

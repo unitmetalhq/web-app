@@ -1,5 +1,10 @@
 import { useState } from "react";
-import { Loader2, ChevronDown } from "lucide-react";
+import { useAtomValue } from "jotai";
+import { useReadContracts, useConnection } from "wagmi";
+import { erc20Abi } from "viem";
+import type { Address } from "viem";
+import { Loader2, ChevronDown, BadgeCheck } from "lucide-react";
+import { customTokensAtom } from "@/atoms/customTokensAtom";
 import {
   Dialog,
   DialogClose,
@@ -10,8 +15,10 @@ import {
 } from "@/components/ui/dialog";
 
 // ── TokenListToken ────────────────────────────────────────────────────────────
-// Shape of a single entry in /token-list.json. Shared between the swap
-// component and any other component that needs to pick from the token list.
+// Shape of a single entry in /token-list.json. Shared between the token picker
+// and any other component that needs to pick from the token list.
+// isVerified is optional — callers don't need to set it; the dialog defaults
+// list-sourced tokens to true and custom tokens to false.
 
 export type TokenListToken = {
   chainId: number;
@@ -20,6 +27,7 @@ export type TokenListToken = {
   symbol: string;
   decimals: number;
   logoURI?: string;
+  isVerified?: boolean;
 };
 
 // ── TokenPickerDialog ─────────────────────────────────────────────────────────
@@ -29,12 +37,18 @@ export type TokenListToken = {
 // chevron. Inside the dialog, the user can search by name or symbol and click
 // a row to confirm the selection.
 //
+// Internally the dialog:
+//   • Merges custom tokens (from customTokensAtom) deduplicated against the
+//     passed list — so custom-added tokens appear without duplicates.
+//   • Fetches balanceOf for all tokens and sorts non-zero-balance tokens first
+//     (descending), falling back to list order for zero-balance tokens.
+//   • Shows a BadgeCheck icon for verified (list-sourced) tokens.
+//
 // Props:
-//   tokens          — full token list to display/filter
+//   tokens          — token list filtered to the current chain by the caller
 //   value           — currently selected token address (or "")
 //   onSelect        — called with the chosen token's address
-//   disabledAddress — address of the token that should be un-selectable
-//                     (e.g. the other side of a swap pair)
+//   disabledAddress — address that should be un-selectable (e.g. swap pair)
 //   isLoading       — shows a spinner on the trigger while the list loads
 
 export function TokenPickerDialog({
@@ -52,15 +66,72 @@ export function TokenPickerDialog({
 }) {
   const [search, setSearch] = useState("");
 
-  const selected = tokens.find((t) => t.address === value);
-  const filtered = tokens.filter(
+  const { address } = useConnection();
+  const customTokens = useAtomValue(customTokensAtom);
+
+  // Derive chainId from the passed list — all tokens are pre-filtered to the
+  // same chain by the caller, so the first entry is representative.
+  const chainId = tokens[0]?.chainId;
+
+  // ── Merge custom tokens ───────────────────────────────────────────────────
+  // Filter custom tokens to the same chain and remove any already in the list.
+  const customForChain = customTokens.filter((t) => t.chainId === chainId);
+  const dedupedCustom = customForChain.filter(
+    (ct) => !tokens.some((lt) => lt.address.toLowerCase() === ct.address.toLowerCase())
+  );
+
+  const allTokens: (TokenListToken & { isVerified: boolean })[] = [
+    ...tokens.map((t) => ({ ...t, isVerified: t.isVerified ?? true })),
+    ...dedupedCustom.map((t) => ({ ...t, isVerified: false })),
+  ];
+
+  // ── Balance query ─────────────────────────────────────────────────────────
+  // Same contracts array order as balances-component.tsx → shared wagmi cache.
+  const { data: tokenBalances } = useReadContracts({
+    contracts: allTokens.map((token) => ({
+      address: token.address,
+      abi: erc20Abi,
+      functionName: "balanceOf" as const,
+      args: [address!] as [Address],
+      chainId,
+    })),
+    query: {
+      enabled: !!address && !!chainId && allTokens.length > 0,
+      refetchOnMount: false,
+    },
+  });
+
+  const balanceMap = new Map<string, bigint>();
+  allTokens.forEach((token, i) => {
+    const raw = tokenBalances?.[i];
+    if (raw?.status === "success") {
+      balanceMap.set(token.address.toLowerCase(), raw.result as bigint);
+    }
+  });
+
+  // ── Sort: non-zero balance first (desc), then preserve list order ─────────
+  const sortedTokens = [...allTokens].sort((a, b) => {
+    const balA = balanceMap.get(a.address.toLowerCase()) ?? 0n;
+    const balB = balanceMap.get(b.address.toLowerCase()) ?? 0n;
+    if (balA > 0n && balB === 0n) return -1;
+    if (balA === 0n && balB > 0n) return 1;
+    if (balA !== balB) return balA > balB ? -1 : 1;
+    return 0;
+  });
+
+  // Use allTokens (unsorted) for the selected label so it doesn't flicker
+  // while balances are loading.
+  const selected = allTokens.find(
+    (t) => t.address.toLowerCase() === value.toLowerCase()
+  );
+
+  const filtered = sortedTokens.filter(
     (t) =>
       t.symbol.toLowerCase().includes(search.toLowerCase()) ||
       t.name.toLowerCase().includes(search.toLowerCase())
   );
 
   return (
-    // Clear search when the dialog closes so it's blank on next open.
     <Dialog onOpenChange={(open) => { if (!open) setSearch(""); }}>
       <DialogTrigger
         disabled={isLoading}
@@ -108,7 +179,12 @@ export function TokenPickerDialog({
                   />
                 }
               >
-                <span className="font-medium">{token.symbol}</span>
+                <div className="flex items-center gap-1">
+                  <span className="font-medium">{token.symbol}</span>
+                  {token.isVerified && (
+                    <BadgeCheck className="w-3 h-3 text-muted-foreground" />
+                  )}
+                </div>
                 <span className="text-muted-foreground">{token.name}</span>
               </DialogClose>
             ))

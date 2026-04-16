@@ -26,6 +26,7 @@ import { TransactionObject } from "@/components/transaction-object";
 import { TransactionStatus } from "@/components/transaction-status";
 import { Kbd } from "@/components/ui/kbd";
 import { useIsViewOnly } from "@/hooks/use-is-view-only";
+import { NftPickerDialog } from "@/components/nft-picker-dialog";
 
 
 export default function SendErc721TokenForm({
@@ -308,32 +309,44 @@ export default function SendErc721TokenForm({
                 <div className="flex flex-row gap-2 items-center">
                   <p className="text-muted-foreground">Contract</p>
                 </div>
-                <InputGroup>
-                  <InputGroupInput
-                    id={field.name}
-                    name={field.name}
-                    value={field.state.value || ""}
-                    onChange={(e) => field.handleChange(e.target.value)}
-                    className="rounded-none"
-                    type="text"
-                    placeholder="Address (0x...) or ENS (.eth)"
-                    required
+                {/* grid: [picker button | ENS address input] */}
+                <div className="grid grid-cols-[auto_1fr] gap-2 items-start">
+                  <NftPickerDialog
+                    contractValue={tokenAddress}
+                    tokenIdValue={tokenId}
+                    onSelect={(addr, id) => {
+                      field.handleChange(addr);
+                      if (id) form.setFieldValue("tokenId", id);
+                    }}
+                    chainId={selectedChain ?? undefined}
                   />
-                  <InputGroupAddon align="inline-end">
-                    <InputGroupButton
-                      aria-label="ENS lookup"
-                      size="icon-xs"
-                      onClick={() => refetchTokenEnsAddress()}
-                      className="hover:cursor-pointer"
-                    >
-                      {isLoadingTokenEnsAddress ? (
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                      ) : (
-                        <Search />
-                      )}
-                    </InputGroupButton>
-                  </InputGroupAddon>
-                </InputGroup>
+                  <InputGroup>
+                    <InputGroupInput
+                      id={field.name}
+                      name={field.name}
+                      value={field.state.value || ""}
+                      onChange={(e) => field.handleChange(e.target.value)}
+                      className="rounded-none"
+                      type="text"
+                      placeholder="Address (0x...) or ENS (.eth)"
+                      required
+                    />
+                    <InputGroupAddon align="inline-end">
+                      <InputGroupButton
+                        aria-label="ENS lookup"
+                        size="icon-xs"
+                        onClick={() => refetchTokenEnsAddress()}
+                        className="hover:cursor-pointer"
+                      >
+                        {isLoadingTokenEnsAddress ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <Search />
+                        )}
+                      </InputGroupButton>
+                    </InputGroupAddon>
+                  </InputGroup>
+                </div>
                 <TokenAddressFieldInfo
                   field={field}
                   ensAddress={tokenEnsAddress}

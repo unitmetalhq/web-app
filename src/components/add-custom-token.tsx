@@ -4,15 +4,15 @@ import { erc20Abi } from "viem";
 import { Loader2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import type { CustomToken } from "@/lib/atoms/custom-token-list";
+import type { TokenListToken } from "@/atoms/customTokensAtom";
 
-export default function AddCustomToken({
+export default function AddTokenListToken({
   chainId,
   onAdd,
   onCancel,
 }: {
   chainId: number;
-  onAdd: (token: CustomToken) => void;
+  onAdd: (token: TokenListToken) => void;
   onCancel: () => void;
 }) {
   const [input, setInput] = useState("");

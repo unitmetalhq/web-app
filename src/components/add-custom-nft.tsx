@@ -3,7 +3,7 @@ import { useReadContracts } from "wagmi";
 import { Loader2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import type { NftCollection } from "@/lib/atoms/custom-nft-list";
+import type { NftCollection } from "@/atoms/customNftsAtom";
 import { erc721Abi } from "viem";
 
 

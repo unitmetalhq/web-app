@@ -1,11 +1,12 @@
 import { atomWithStorage } from "jotai/utils";
 
-export type CustomToken = {
+export type TokenListToken = {
   chainId: number;
   address: `0x${string}`;
   name: string;
   symbol: string;
   decimals: number;
+  logoURI?: string;
 };
 
-export const customTokensAtom = atomWithStorage<CustomToken[]>("custom-token-list", []);
+export const customTokensAtom = atomWithStorage<TokenListToken[]>("customTokens", []);

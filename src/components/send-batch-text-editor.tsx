@@ -4,8 +4,9 @@ import { githubLight, githubDark } from "@uiw/codemirror-theme-github";
 import { useTheme } from "@/components/theme-provider";
 import { Button } from "@/components/ui/button";
 import { Loader2, Eraser } from "lucide-react";
-import { parseEther, formatEther, parseUnits, formatUnits, erc20Abi, erc721Abi, type Address } from "viem";
-import { useWriteContract, useWaitForTransactionReceipt, useConfig, useSimulateContract, useReadContract, useConnection } from "wagmi";
+import { parseEther, formatEther, parseUnits, formatUnits, encodeFunctionData, erc20Abi, erc721Abi, maxUint256, type Address } from "viem";
+import { useWriteContract, useWaitForTransactionReceipt, useConfig, usePrepareTransactionRequest, useReadContract, useConnection } from "wagmi";
+import { useIsViewOnly } from "@/hooks/use-is-view-only";
 import { BATCH_DISTRIBUTOR_CONTRACT_ADDRESS } from "@/lib/constants";
 import { BatchDistributorAbi } from "@/lib/abis/batch-distributor-abi";
 import { TransactionStatus } from "@/components/transaction-status";
@@ -41,6 +42,7 @@ export function BatchTextEditor({
 }: BatchEditorProps) {
   const config = useConfig();
   const connection = useConnection();
+  const isViewOnly = useIsViewOnly();
   // Resolve block explorer URL for the currently selected chain so transaction
   // hashes can link out to the correct explorer.
   const blockExplorerUrl = config.chains.find((c) => c.id === selectedChain)?.blockExplorers?.default.url;
@@ -77,6 +79,9 @@ export function BatchTextEditor({
   const [submitError, setSubmitError] = useState<string | null>(null);
   // Controls whether the raw transaction object preview is visible.
   const [showTxObject, setShowTxObject] = useState(false);
+  // View-only mode: toggle for approval tx objects
+  const [showApproveTxObject, setShowApproveTxObject] = useState(false);
+  const [showApproveUnlimitedTxObject, setShowApproveUnlimitedTxObject] = useState(false);
 
   const isNft = token?.isNft ?? false;
   const symbol = token ? token.symbol : (nativeBalance?.symbol ?? "ETH");
@@ -179,40 +184,61 @@ export function BatchTextEditor({
     }
   });
 
-  const simulateEnabled = showTxObject && simulatedAddresses.length > 0;
+  // ── Distribution tx preparation ──────────────────────────────────────────────
+  const prepareEnabled = showTxObject && simulatedAddresses.length > 0;
+  let distributionCalldata: `0x${string}` | undefined;
+  let distributionValue = 0n;
+  let distributionPrepareEnabled = false;
+  try {
+    if (isNft && token) {
+      distributionCalldata = encodeFunctionData({ abi: BatchDistributorAbi, functionName: "distributeNft", args: [token.address, { txns: simulatedAddresses.map((addr, i) => ({ recipient: addr, amount: simulatedAmounts[i] })) }] });
+      distributionValue = fee;
+      distributionPrepareEnabled = prepareEnabled;
+    } else if (token) {
+      distributionCalldata = encodeFunctionData({ abi: BatchDistributorAbi, functionName: "distributeToken", args: [token.address, { txns: simulatedAddresses.map((addr, i) => ({ recipient: addr, amount: simulatedAmounts[i] })) }] });
+      distributionValue = fee;
+      distributionPrepareEnabled = prepareEnabled && totalAmount > 0n && !needsApproval;
+    } else {
+      distributionCalldata = encodeFunctionData({ abi: BatchDistributorAbi, functionName: "distributeEther", args: [{ txns: simulatedAddresses.map((addr, i) => ({ recipient: addr, amount: simulatedAmounts[i] })) }] });
+      distributionValue = totalAmount + fee;
+      distributionPrepareEnabled = prepareEnabled && totalAmount > 0n;
+    }
+  } catch { /* encoding failed — leave calldata undefined */ }
   const {
-    data: simulatedTx,
-    isLoading: isLoadingSimulate,
-    isError: isErrorSimulate,
-  } = useSimulateContract(
-    isNft && token
-      ? {
-          address: BATCH_DISTRIBUTOR_CONTRACT_ADDRESS,
-          abi: BatchDistributorAbi,
-          functionName: "distributeNft",
-          args: [token.address, { txns: simulatedAddresses.map((addr, i) => ({ recipient: addr, amount: simulatedAmounts[i] })) }],
-          value: fee,
-          query: { enabled: simulateEnabled },
-        }
-      : token
-      ? {
-          address: BATCH_DISTRIBUTOR_CONTRACT_ADDRESS,
-          abi: BatchDistributorAbi,
-          functionName: "distributeToken",
-          args: [token.address, { txns: simulatedAddresses.map((addr, i) => ({ recipient: addr, amount: simulatedAmounts[i] })) }],
-          value: fee,
-          // Don't simulate if approval is still needed — the call would revert.
-          query: { enabled: simulateEnabled && totalAmount > 0n && !needsApproval },
-        }
-      : {
-          address: BATCH_DISTRIBUTOR_CONTRACT_ADDRESS,
-          abi: BatchDistributorAbi,
-          functionName: "distributeEther",
-          args: [{ txns: simulatedAddresses.map((addr, i) => ({ recipient: addr, amount: simulatedAmounts[i] })) }],
-          value: totalAmount + fee,
-          query: { enabled: simulateEnabled && totalAmount > 0n },
-        }
-  );
+    data: preparedTx,
+    isLoading: isLoadingPrepare,
+    isError: isErrorPrepare,
+  } = usePrepareTransactionRequest({
+    to: BATCH_DISTRIBUTOR_CONTRACT_ADDRESS,
+    data: distributionCalldata,
+    value: distributionValue,
+    chainId: selectedChain ?? undefined,
+    query: { enabled: !!distributionCalldata && distributionPrepareEnabled },
+  });
+
+  // ── View-only approval preparation ───────────────────────────────────────────
+  // Exact approve: NFT → setApprovalForAll; ERC20 → approve(totalAmount)
+  const approveCalldata = (isNft && !!token)
+    ? encodeFunctionData({ abi: erc721Abi, functionName: "setApprovalForAll", args: [BATCH_DISTRIBUTOR_CONTRACT_ADDRESS as Address, true] })
+    : (!!token && totalAmount > 0n)
+    ? encodeFunctionData({ abi: erc20Abi, functionName: "approve", args: [BATCH_DISTRIBUTOR_CONTRACT_ADDRESS as Address, totalAmount] })
+    : undefined;
+  const { data: preparedApprove, isLoading: isLoadingPrepareApprove, isError: isErrorPrepareApprove } = usePrepareTransactionRequest({
+    to: token?.address,
+    data: approveCalldata,
+    chainId: selectedChain ?? undefined,
+    query: { enabled: isViewOnly && !!token && showApproveTxObject && !!approveCalldata },
+  });
+  // Unlimited approve: ERC20 only → approve(maxUint256)
+  const approveUnlimitedCalldata = (!isNft && !!token)
+    ? encodeFunctionData({ abi: erc20Abi, functionName: "approve", args: [BATCH_DISTRIBUTOR_CONTRACT_ADDRESS as Address, maxUint256] })
+    : undefined;
+  const { data: preparedApproveUnlimited, isLoading: isLoadingPrepareApproveUnlimited, isError: isErrorPrepareApproveUnlimited } = usePrepareTransactionRequest({
+    to: token?.address,
+    data: approveUnlimitedCalldata,
+    chainId: selectedChain ?? undefined,
+    query: { enabled: isViewOnly && !!token && showApproveUnlimitedTxObject && !!approveUnlimitedCalldata },
+  });
 
   // ── handleSubmit ─────────────────────────────────────────────────────────────
   // Dispatches to the correct BatchDistributor function based on the current
@@ -381,47 +407,137 @@ export function BatchTextEditor({
           Request toggles the transaction object preview (simulation).
           Send batch is disabled until canSubmit and approval are satisfied. */}
       <div className="flex flex-col gap-2">
-        {token && (isNft ? !(isApprovedForAll ?? false) : needsApproval) && (
-          <Button
-            type="button"
-            variant="outline"
-            className="rounded-none w-full hover:cursor-pointer"
-            disabled={approveWrite.isPending || isApproveConfirming}
-            onClick={async () => {
-              try {
-                if (isNft) {
-                  // ERC721: grant the BatchDistributor operator rights over all
-                  // tokens in this collection.
-                  await approveWrite.mutateAsync({
-                    address: token.address,
-                    abi: erc721Abi,
-                    functionName: "setApprovalForAll",
-                    args: [BATCH_DISTRIBUTOR_CONTRACT_ADDRESS as Address, true],
-                  });
-                } else {
-                  // ERC20: approve the exact amount required for this batch.
-                  await approveWrite.mutateAsync({
-                    address: token.address,
-                    abi: erc20Abi,
-                    functionName: "approve",
-                    args: [BATCH_DISTRIBUTOR_CONTRACT_ADDRESS as Address, totalAmount],
-                  });
-                }
-              } catch {
-                // user rejected or tx failed — errors surfaced by wallet
-              }
-            }}
-          >
-            {approveWrite.isPending || isApproveConfirming ? (
-              <Loader2 className="w-4 h-4 animate-spin" />
-            ) : isNft ? (
-              `Approve for all`
+        {token && (isViewOnly
+          ? (
+            // View-only: Request buttons for approval tx objects
+            isNft ? (
+              <>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="rounded-none w-full hover:cursor-pointer"
+                  disabled={!canSubmit}
+                  onClick={() => setShowApproveTxObject((prev) => !prev)}
+                >
+                  Request setApprovalForAll
+                </Button>
+                {showApproveTxObject && (
+                  <TransactionObject
+                    transactionObject={preparedApprove ?? null}
+                    isLoading={isLoadingPrepareApprove}
+                    isError={isErrorPrepareApprove}
+                  />
+                )}
+              </>
             ) : (
-              `Approve ${symbol}`
-            )}
-          </Button>
+              <>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="rounded-none w-full hover:cursor-pointer"
+                  disabled={!canSubmit}
+                  onClick={() => setShowApproveTxObject((prev) => !prev)}
+                >
+                  Request exact approval
+                </Button>
+                {showApproveTxObject && (
+                  <TransactionObject
+                    transactionObject={preparedApprove ?? null}
+                    isLoading={isLoadingPrepareApprove}
+                    isError={isErrorPrepareApprove}
+                  />
+                )}
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="rounded-none w-full hover:cursor-pointer"
+                  onClick={() => setShowApproveUnlimitedTxObject((prev) => !prev)}
+                >
+                  Request unlimited approval
+                </Button>
+                {showApproveUnlimitedTxObject && (
+                  <TransactionObject
+                    transactionObject={preparedApproveUnlimited ?? null}
+                    isLoading={isLoadingPrepareApproveUnlimited}
+                    isError={isErrorPrepareApproveUnlimited}
+                  />
+                )}
+              </>
+            )
+          ) : (
+            // Normal: approval buttons shown only when needed
+            isNft ? (
+              !(isApprovedForAll ?? false) && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="rounded-none w-full hover:cursor-pointer"
+                  disabled={approveWrite.isPending || isApproveConfirming}
+                  onClick={async () => {
+                    try {
+                      await approveWrite.mutateAsync({
+                        address: token.address,
+                        abi: erc721Abi,
+                        functionName: "setApprovalForAll",
+                        args: [BATCH_DISTRIBUTOR_CONTRACT_ADDRESS as Address, true],
+                      });
+                    } catch { /* user rejected or tx failed */ }
+                  }}
+                >
+                  {approveWrite.isPending || isApproveConfirming ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : "Approve for all"}
+                </Button>
+              )
+            ) : (
+              needsApproval && (
+                <div className="grid grid-cols-2 gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="rounded-none hover:cursor-pointer"
+                    disabled={approveWrite.isPending || isApproveConfirming}
+                    onClick={async () => {
+                      try {
+                        await approveWrite.mutateAsync({
+                          address: token.address,
+                          abi: erc20Abi,
+                          functionName: "approve",
+                          args: [BATCH_DISTRIBUTOR_CONTRACT_ADDRESS as Address, totalAmount],
+                        });
+                      } catch { /* user rejected or tx failed */ }
+                    }}
+                  >
+                    {approveWrite.isPending || isApproveConfirming ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : `Approve exact`}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="rounded-none hover:cursor-pointer"
+                    disabled={approveWrite.isPending || isApproveConfirming}
+                    onClick={async () => {
+                      try {
+                        await approveWrite.mutateAsync({
+                          address: token.address,
+                          abi: erc20Abi,
+                          functionName: "approve",
+                          args: [BATCH_DISTRIBUTOR_CONTRACT_ADDRESS as Address, maxUint256],
+                        });
+                      } catch { /* user rejected or tx failed */ }
+                    }}
+                  >
+                    {approveWrite.isPending || isApproveConfirming ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : `Approve unlimited`}
+                  </Button>
+                </div>
+              )
+            )
+          )
         )}
-        <div className="grid grid-cols-2 gap-2">
+        <div className={isViewOnly ? "flex flex-col gap-2" : "grid grid-cols-2 gap-2"}>
           <Button
             type="button"
             variant="outline"
@@ -431,16 +547,16 @@ export function BatchTextEditor({
           >
             Request
           </Button>
-          <Button
-            type="button"
-            className="rounded-none hover:cursor-pointer"
-            // ERC20: also blocked when approval is still pending, even if
-            // canSubmit is true, to prevent sending before the approve confirms.
-            disabled={!canSubmit || (!isNft && needsApproval) || isPending}
-            onClick={handleSubmit}
-          >
-            {isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : "Send batch"}
-          </Button>
+          {!isViewOnly && (
+            <Button
+              type="button"
+              className="rounded-none hover:cursor-pointer"
+              disabled={!canSubmit || (!isNft && needsApproval) || isPending}
+              onClick={handleSubmit}
+            >
+              {isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : "Send batch"}
+            </Button>
+          )}
         </div>
       </div>
 
@@ -449,9 +565,9 @@ export function BatchTextEditor({
           value, and other fields from the simulated transaction. */}
       {showTxObject && (
         <TransactionObject
-          transactionObject={simulatedTx?.request ?? null}
-          isLoading={isLoadingSimulate}
-          isError={isErrorSimulate}
+          transactionObject={preparedTx ?? null}
+          isLoading={isLoadingPrepare}
+          isError={isErrorPrepare}
         />
       )}
 
