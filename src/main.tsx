@@ -2,7 +2,7 @@ import { StrictMode } from "react"
 import { createRoot } from "react-dom/client"
 import "./index.css"
 import { mainnet } from "wagmi/chains"
-import { WagmiProvider, createConfig, http, injected } from "wagmi"
+import { WagmiProvider, createConfig, http, injected, unstable_connector, fallback } from "wagmi"
 import { impersonatorConnector } from "@/lib/impersonator-connector"
 
 // --- Router ---
@@ -23,7 +23,10 @@ const config = createConfig({
   chains: [mainnet],
   connectors: [injected(), impersonatorConnector],
   transports: {
-    [mainnet.id]: http(import.meta.env.VITE_RPC_URL_ETHEREUM!),
+    [mainnet.id]: fallback([
+      unstable_connector(injected), 
+      http(import.meta.env.VITE_MAINNET_RPC_URL!)
+    ]),
     // [base.id]: http(import.meta.env.VITE_RPC_URL_BASE!),
     // [arbitrum.id]: http(import.meta.env.VITE_RPC_URL_ARBITRUM!),
   },

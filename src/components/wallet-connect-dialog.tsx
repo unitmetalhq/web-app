@@ -222,10 +222,9 @@ export function WalletConnectButton() {
 
             <Button
               variant="outline"
-              size="sm"
-              className="rounded-none w-full"
+              className="rounded-none w-full hover:cursor-pointer"
               onClick={() => {
-                disconnect.mutate({});
+                disconnect.mutate();
                 setOpen(false);
               }}
             >
