@@ -100,13 +100,18 @@ export default function BalancesComponent() {
       args: [address!] as [Address],
       chainId,
     })),
-    query: { enabled: isQueryEnabled && allTokens.length > 0, refetchOnMount: false },
+    query: { enabled: isQueryEnabled && allTokens.length > 0, refetchOnWindowFocus: false },
   });
 
-  const { isLoading: isLoadingNative, refetch: refetchNative } = useBalance({
+  const {
+    data: nativeBalanceData,
+    isLoading: isLoadingNative,
+    isError: isErrorNative,
+    refetch: refetchNative,
+  } = useBalance({
     address,
     chainId,
-    query: { enabled: isQueryEnabled, refetchOnMount: false },
+    query: { enabled: isQueryEnabled, refetchOnWindowFocus: false },
   });
 
   // ── NFT list ────────────────────────────────────────────────────────────────
@@ -244,12 +249,13 @@ export default function BalancesComponent() {
               {/* Native balance */}
               <div className="flex flex-col gap-2 px-4">
                 <NativeBalanceRow
-                  address={address}
-                  chainId={chainId}
                   name={nativeCurrency?.name ?? "Native"}
                   symbol={nativeCurrency?.symbol ?? "—"}
                   decimals={nativeCurrency?.decimals ?? 18}
-                  isQueryEnabled={isQueryEnabled}
+                  balance={nativeBalanceData?.value}
+                  isLoading={isQueryEnabled && isLoadingNative}
+                  isError={isQueryEnabled && isErrorNative}
+                  onRefresh={refetchNative}
                 />
               </div>
 
@@ -389,35 +395,31 @@ export default function BalancesComponent() {
 // ── NativeBalanceRow ──────────────────────────────────────────────────────────
 
 function NativeBalanceRow({
-  address,
-  chainId,
   name,
   symbol,
   decimals,
-  isQueryEnabled,
+  balance,
+  isLoading,
+  isError,
+  onRefresh,
 }: {
-  address: Address | undefined;
-  chainId: number | undefined;
   name: string;
   symbol: string;
   decimals: number;
-  isQueryEnabled: boolean;
+  balance: bigint | undefined;
+  isLoading: boolean;
+  isError: boolean;
+  onRefresh: () => void;
 }) {
-  const { data: balance, isLoading, isError, refetch } = useBalance({
-    address,
-    chainId,
-    query: { enabled: isQueryEnabled, refetchOnMount: false },
-  });
-
   return (
     <BalanceRow
       name={name}
       symbol={symbol}
-      value={formatUnits(balance?.value ?? BigInt(0), decimals)}
-      isLoading={isQueryEnabled && isLoading}
-      isError={isQueryEnabled && isError}
+      value={formatUnits(balance ?? BigInt(0), decimals)}
+      isLoading={isLoading}
+      isError={isError}
       isVerified={true}
-      onRefresh={refetch}
+      onRefresh={onRefresh}
     />
   );
 }

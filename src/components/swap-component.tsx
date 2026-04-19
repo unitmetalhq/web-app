@@ -23,18 +23,16 @@ import {
   useSendTransaction,
   useSendCalls,
   useWaitForTransactionReceipt,
-  useWaitForCallsStatus,
-  useEstimateGas,
-  useGasPrice,
+  useWaitForCallsStatus
 } from "wagmi";
-
-const ETH_ADDRESS = '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE' as const;
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { Skeleton } from "@/components/ui/skeleton";
 import { TokenPickerDialog, type TokenListToken } from "@/components/token-picker-dialog";
 import { Kbd } from "@/components/ui/kbd";
 import { TransactionStatus } from "@/components/transaction-status";
+import { InformationDialog } from "@/components/information-dialog";
 
+const ETH_ADDRESS = '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE' as const;
 
 // ── Main swap component ──────────────────────────────────────
 export default function SwapComponent() {
@@ -50,9 +48,10 @@ export default function SwapComponent() {
   );
 }
 
-
+// ── Slippage presets ──────────────────────────────────────────────
 const SLIPPAGE_PRESETS = ["0.02", "0.1", "0.5", "1"] as const;
 
+// ── Amount presets ──────────────────────────────────────────────
 const AMOUNT_PRESETS = [
   { label: "25%", num: BigInt(1), den: BigInt(4) },
   { label: "50%", num: BigInt(1), den: BigInt(2) },
@@ -404,27 +403,6 @@ function SwapForm() {
     }
   }
 
-  // ── Gas fee ──────────────────────────────────────────────────────────────
-  const zfiTx = zfiQuery.data?.tx;
-
-  const { data: gasEstimate } = useEstimateGas({
-    to: zfiTx?.to,
-    data: zfiTx?.data,
-    value: zfiTx ? BigInt(zfiTx.value) : undefined,
-    chainId: effectiveChain ?? undefined,
-    query: { enabled: !!zfiTx && !!connection.address },
-  });
-
-  const { data: gasPrice } = useGasPrice({
-    chainId: effectiveChain ?? undefined,
-    query: { enabled: !!effectiveChain },
-  });
-
-  const gasFeeGwei =
-    gasEstimate !== undefined && gasPrice !== undefined
-      ? formatUnits(gasEstimate * gasPrice, 18)
-      : null;
-
   function handleReset() {
     form.reset();
   }
@@ -659,11 +637,6 @@ function SwapForm() {
         </div>
         {/* ── Swap Info ───────────────────────────────── */}
         <div className="flex flex-col gap-2 border-t border-border pt-2">
-          <SwapGasFeeBox
-            gasFeeEth={gasFeeGwei}
-            nativeBalance={nativeBalance?.value}
-            nativeSymbol={nativeBalance?.symbol ?? "ETH"}
-          />
           <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between text-xs gap-1 lg:gap-0">
             <p className="text-muted-foreground">Max slippage</p>
             <div className="flex items-center gap-1">
@@ -783,7 +756,7 @@ function SwapForm() {
         </div>
 
         {/* ── Actions ───────────────────────────────────────────── */}
-        <div className="flex flex-col gap-2 border-t border-border pt-6">
+        <div className="flex flex-col gap-2 pt-6">
           <form.Subscribe selector={(state) => [state.canSubmit]}>
             {([canSubmit]) => {
               const isApproving = isApprovePending || isApproveConfirming;
@@ -901,32 +874,6 @@ type AggregatorRoute = {
   amountOut: string;
 };
 
-function SwapGasFeeBox({
-  gasFeeEth,
-  nativeBalance,
-  nativeSymbol,
-}: {
-  gasFeeEth: string | null;
-  nativeBalance: bigint | undefined;
-  nativeSymbol: string;
-}) {
-  const formattedNativeBalance = nativeBalance !== undefined
-    ? formatUnits(nativeBalance, 18)
-    : null;
-
-  return (
-    <div className="flex flex-row items-start justify-between text-xs">
-      <p className="text-muted-foreground">Gas fee</p>
-      <div className="flex flex-col lg:flex-row items-end lg:items-center gap-0.5">
-        <p>{gasFeeEth !== null ? `${gasFeeEth}` : "—"}</p>
-        <div className="w-full h-px bg-border lg:hidden" />
-        <span className="hidden lg:inline text-muted-foreground">/</span>
-        <p className="text-muted-foreground">{formattedNativeBalance} {nativeSymbol}</p>
-      </div>
-    </div>
-  );
-}
-
 function RouteSelector({
   zfiQuery,
   onRouteChange,
@@ -957,9 +904,12 @@ function RouteSelector({
   }, [zfiQuery.data]);
 
   return (
-    <div className="flex flex-col border border-border text-xs">
-      <div className="flex flex-row items-center justify-between px-2 py-1.5 border-b border-border">
-        <p className="text-muted-foreground">Route</p>
+    <div className="flex flex-col border border-primary text-xs">
+      <div className="flex flex-row items-center justify-between px-2 py-1.5 border-b border-primary">
+        <div className="flex flex-row gap-2">
+          <p>Swap Routes</p>
+          <InformationDialog title="Swap Routes" content="Select a route provider below to swap. Routes are sorted by the best output amount." />
+        </div>
         {zfiQuery.isFetching && <Loader2 className="w-3 h-3 animate-spin text-muted-foreground" />}
       </div>
       <div className="flex flex-col max-h-32 overflow-y-auto">
@@ -1048,40 +998,3 @@ function TokenBalanceRow({
     </div>
   );
 }
-
-
-// function TokenFieldInfo({ field }: { field: AnyFieldApi }) {
-//   return (
-//     <>
-//       {field.state.meta.isTouched && !field.state.meta.isValid ? (
-//         <em className="text-red-400">{field.state.meta.errors.join(",")}</em>
-//       ) : field.state.meta.isTouched ? (
-//         <em className="text-green-500">ok!</em>
-//       ) : null}
-//       {field.state.meta.isValidating ? "Validating..." : null}
-//     </>
-//   );
-// }
-
-// function AmountFieldInfo({ field }: { field: AnyFieldApi }) {
-//   return (
-//     <>
-//       {!field.state.meta.isTouched ? (
-//         <em>Please enter an amount to swap</em>
-//       ) : field.state.meta.isTouched && !field.state.meta.isValid ? (
-//         <em
-//           className={
-//             field.state.meta.errors.join(",") === "Please enter an amount"
-//               ? ""
-//               : "text-red-400"
-//           }
-//         >
-//           {field.state.meta.errors.join(",")}
-//         </em>
-//       ) : (
-//         <em className="text-green-500">ok!</em>
-//       )}
-//       {field.state.meta.isValidating ? "Validating..." : null}
-//     </>
-//   );
-// }
