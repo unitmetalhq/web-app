@@ -11,11 +11,9 @@ import {
   Eraser,
   RefreshCcw,
   Quote,
-  Pencil,
 } from "lucide-react";
 import { type Address, type Hash, erc20Abi, encodeFunctionData, formatUnits, parseUnits, maxUint256 } from "viem";
 import { fetchZfiQuote, ZFI_ETH, type ZfiQuoteResponse } from "@/lib/swap-providers/zfi";
-import { defaultSlippage } from "@/lib/slippage";
 import {
   useReadContract,
   useBalance,
@@ -32,19 +30,13 @@ import {
 
 const ETH_ADDRESS = '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE' as const;
 import { useMediaQuery } from "@/hooks/use-media-query";
-import { useDebounce } from "@/hooks/use-debounce";
 import { Skeleton } from "@/components/ui/skeleton";
 import { TokenPickerDialog, type TokenListToken } from "@/components/token-picker-dialog";
-import {
-  Accordion,
-  AccordionContent,
-  AccordionItem,
-  AccordionTrigger,
-} from "@/components/ui/accordion";
 import { Kbd } from "@/components/ui/kbd";
 import { TransactionStatus } from "@/components/transaction-status";
 
 
+// ── Main swap component ──────────────────────────────────────
 export default function SwapComponent() {
   return (
     <div className="flex flex-col border-2 border-primary gap-2 pb-8">
@@ -58,13 +50,37 @@ export default function SwapComponent() {
   );
 }
 
+
+const SLIPPAGE_PRESETS = ["0.02", "0.1", "0.5", "1"] as const;
+
+const AMOUNT_PRESETS = [
+  { label: "25%", num: BigInt(1), den: BigInt(4) },
+  { label: "50%", num: BigInt(1), den: BigInt(2) },
+  { label: "75%", num: BigInt(3), den: BigInt(4) },
+  { label: "Max", num: BigInt(1), den: BigInt(1) },
+] as const;
+
+// ── Swap form component ──────────────────────────────────────
 function SwapForm() {
+  // Media query hook
+  // Use a media query to determine if the screen is desktop or mobile.
   const isDesktop = useMediaQuery("(min-width: 768px)");
+
+  // Wagmi useConnection hook
+  // Use the useConnection hook to get the current wallet connection.
   const connection = useConnection();
 
+  // Tanstack useSearch hook
+  // Use the useSearch hook to get the search parameters from the URL.
   const search = useSearch({ from: '/swap' });
+
+  // Tanstack useNavigate hook
+  // Use the useNavigate hook to navigate to the swap page.
   const navigate = useNavigate({ from: '/swap' });
 
+  // React Query useQuery hook
+  // Use the useQuery hook to fetch the token list from the token-list.json file.
+  // This token list most likely would hit cache
   const { data: tokenList, isLoading: isLoadingTokens } = useQuery({
     queryKey: ["token-list"],
     queryFn: async () => {
@@ -75,11 +91,12 @@ function SwapForm() {
     staleTime: Infinity,
   });
 
-  const [slippage, setSlippage] = useState("0.1");
-  const [isEditingSlippage, setIsEditingSlippage] = useState(false);
-  // Tracks whether the user has manually set a slippage value. When true,
-  // automatic token-based defaults no longer override what they typed.
-  const [isSlippageUserSet, setIsSlippageUserSet] = useState(false);
+  // Wagmi useCapabilities hook
+  // Use the useCapabilities hook to get the capabilities of the current wallet.
+  const { data: capabilities } = useCapabilities();
+  // Check if the current wallet supports atomic batch transactions.
+  const supportsAtomicBatch =
+    capabilities?.[connection.chain?.id ?? 0]?.atomicBatch?.supported ?? false;
 
   const effectiveChain = search.chain ?? connection.chain?.id ?? null;
   const tokens = effectiveChain
@@ -92,6 +109,7 @@ function SwapForm() {
       tokenOut: search.to,
       amountIn: "",
       amountOut: "",
+      slippage: "0.1",
       route: null as AggregatorRoute | null,
     },
     onSubmit: async ({ value }) => {
@@ -102,13 +120,11 @@ function SwapForm() {
 
   const tokenIn = useStore(form.store, (state) => state.values.tokenIn);
   const tokenOut = useStore(form.store, (state) => state.values.tokenOut);
-  const amountIn = useStore(form.store, (state) => state.values.amountIn);
+  const slippage = useStore(form.store, (state) => state.values.slippage);
   const selectedRouteKey = useStore(form.store, (state) => {
     const r = state.values.route;
     return r ? `${r.aggregator}:${r.amountOut}` : null;
   });
-  const debouncedAmountIn = useDebounce(amountIn, 500);
-
   const tokenInMeta = tokens.find((t) => t.address === tokenIn);
   const tokenInDecimals =
     tokenIn?.toLowerCase() === ETH_ADDRESS.toLowerCase()
@@ -121,39 +137,29 @@ function SwapForm() {
       ? 18
       : (tokenOutMeta?.decimals ?? 18);
 
-  // ── Default slippage from token symbols ──────────────────────────────────────
-  // Runs whenever tokenIn or tokenOut changes, but skips if the user has
-  // already set a custom value. Logic lives in @/lib/slippage.ts.
-  const symbolIn = tokenIn?.toLowerCase() === ETH_ADDRESS.toLowerCase() ? "ETH" : tokenInMeta?.symbol;
-  const symbolOut = tokenOut?.toLowerCase() === ETH_ADDRESS.toLowerCase() ? "ETH" : tokenOutMeta?.symbol;
 
-  useEffect(() => {
-    if (isSlippageUserSet) return;
-    setSlippage(defaultSlippage(symbolIn, symbolOut));
-  }, [symbolIn, symbolOut, isSlippageUserSet]);
-
-  let parsedAmountIn: bigint | undefined;
-  try {
-    parsedAmountIn = debouncedAmountIn ? parseUnits(debouncedAmountIn, tokenInDecimals) : undefined;
-  } catch {
-    parsedAmountIn = undefined;
+  function getParsedAmountIn(): bigint | undefined {
+    const raw = form.getFieldValue("amountIn");
+    try {
+      return raw ? parseUnits(raw, tokenInDecimals) : undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   const zfiQuery = useQuery({
-    queryKey: ["quote", "zfi", effectiveChain, tokenIn, tokenOut, debouncedAmountIn],
-    queryFn: () =>
-      fetchZfiQuote({
+    queryKey: ["quote", "zfi", effectiveChain, tokenIn, tokenOut],
+    queryFn: () => {
+      const amount = getParsedAmountIn();
+      if (!amount) throw new Error("No amount");
+      return fetchZfiQuote({
         tokenIn: tokenIn.toLowerCase() === ETH_ADDRESS.toLowerCase() ? ZFI_ETH : tokenIn,
         tokenOut: tokenOut.toLowerCase() === ETH_ADDRESS.toLowerCase() ? ZFI_ETH : tokenOut,
-        amount: parsedAmountIn!,
+        amount,
         to: connection.address,
-      }),
-    enabled:
-      effectiveChain === 1 &&
-      !!tokenIn &&
-      !!tokenOut &&
-      parsedAmountIn !== undefined &&
-      parsedAmountIn > 0n,
+      });
+    },
+    enabled: false,
     staleTime: 15_000,
     retry: 1,
   });
@@ -163,15 +169,63 @@ function SwapForm() {
     ? formatUnits(BigInt(rawAmountOut), tokenOutDecimals)
     : "";
 
-  const isDebouncing = amountIn !== debouncedAmountIn;
-  const isLoadingQuote = !!amountIn && (isDebouncing || zfiQuery.isFetching);
+  const isLoadingQuote = zfiQuery.isFetching;
 
   const isNativeTokenIn = tokenIn?.toLowerCase() === ETH_ADDRESS.toLowerCase();
-  const approvalTarget = zfiQuery.data?.approvalTarget;
+  const isNativeTokenOut = tokenOut?.toLowerCase() === ETH_ADDRESS.toLowerCase();
 
-  const { data: capabilities } = useCapabilities();
-  const supportsAtomicBatch =
-    capabilities?.[connection.chain?.id ?? 0]?.atomicBatch?.supported ?? false;
+  // ── Balances ─────────────────────────────────────────────────────────────
+  // Native ETH balance — always fetched for gas estimation.
+  // Also used as tokenIn or tokenOut balance when either is ETH.
+  const {
+    data: nativeBalance,
+    isLoading: isLoadingNativeBalance,
+    refetch: refetchNativeBalance,
+  } = useBalance({
+    address: connection.address,
+    chainId: effectiveChain ?? undefined,
+    query: { enabled: !!connection.address && !!effectiveChain },
+  });
+
+  // ERC20 balance for tokenIn — only when tokenIn is not ETH.
+  const {
+    data: erc20TokenInBalance,
+    isLoading: isLoadingErc20TokenIn,
+    refetch: refetchErc20TokenIn,
+  } = useReadContract({
+    address: tokenIn as Address,
+    abi: erc20Abi,
+    functionName: "balanceOf",
+    args: [connection.address as Address],
+    chainId: effectiveChain ?? undefined,
+    query: { enabled: !!connection.address && !!effectiveChain && !!tokenIn && !isNativeTokenIn },
+  });
+
+  // ERC20 balance for tokenOut — only when tokenOut is not ETH.
+  const {
+    data: erc20TokenOutBalance,
+    isLoading: isLoadingErc20TokenOut,
+    refetch: refetchErc20TokenOut,
+  } = useReadContract({
+    address: tokenOut as Address,
+    abi: erc20Abi,
+    functionName: "balanceOf",
+    args: [connection.address as Address],
+    chainId: effectiveChain ?? undefined,
+    query: { enabled: !!connection.address && !!effectiveChain && !!tokenOut && !isNativeTokenOut },
+  });
+
+  const tokenInRawBalance: bigint | undefined = isNativeTokenIn ? nativeBalance?.value : (erc20TokenInBalance as bigint | undefined);
+  const isLoadingTokenInBalance = isNativeTokenIn ? isLoadingNativeBalance : isLoadingErc20TokenIn;
+  const refetchTokenInBalance = isNativeTokenIn ? refetchNativeBalance : refetchErc20TokenIn;
+  const tokenInSymbol = isNativeTokenIn ? (nativeBalance?.symbol ?? "ETH") : (tokenInMeta?.symbol ?? "");
+
+  const tokenOutRawBalance: bigint | undefined = isNativeTokenOut ? nativeBalance?.value : (erc20TokenOutBalance as bigint | undefined);
+  const isLoadingTokenOutBalance = isNativeTokenOut ? isLoadingNativeBalance : isLoadingErc20TokenOut;
+  const refetchTokenOutBalance = isNativeTokenOut ? refetchNativeBalance : refetchErc20TokenOut;
+  const tokenOutSymbol = isNativeTokenOut ? (nativeBalance?.symbol ?? "ETH") : (tokenOutMeta?.symbol ?? "");
+
+  const approvalTarget = zfiQuery.data?.approvalTarget;
 
   // ── Allowance ────────────────────────────────────────────────────────────
   const {
@@ -193,11 +247,12 @@ function SwapForm() {
     },
   });
 
+  const parsedAmountInForAllowance = getParsedAmountIn();
   const isAllowanceSufficient =
     isNativeTokenIn ||
     (currentAllowance !== undefined &&
-      parsedAmountIn !== undefined &&
-      currentAllowance >= parsedAmountIn);
+      parsedAmountInForAllowance !== undefined &&
+      currentAllowance >= parsedAmountInForAllowance);
 
   const formattedAllowance =
     !isNativeTokenIn && currentAllowance !== undefined
@@ -222,15 +277,16 @@ function SwapForm() {
 
   useEffect(() => {
     if (!isNativeTokenIn && approvalTarget) void refetchAllowance();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tokenIn, approvalTarget]);
 
   useEffect(() => {
     if (!isNativeTokenIn && approvalTarget) void refetchAllowance();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedRouteKey]);
 
   function handleApproveExact() {
+    const parsedAmountIn = getParsedAmountIn();
     if (!approvalTarget || !parsedAmountIn) return;
     writeApprove({
       address: tokenIn as Address,
@@ -317,6 +373,7 @@ function SwapForm() {
   const batchTxHash = batchCallsStatus?.receipts?.at(-1)?.transactionHash as Hash | undefined;
 
   function handleSwapAtomic() {
+    const parsedAmountIn = getParsedAmountIn();
     const tx = zfiQuery.data?.tx;
     if (!tx || !approvalTarget || !parsedAmountIn) return;
     sendCalls.mutate({
@@ -441,11 +498,6 @@ function SwapForm() {
     navigate({ search: (prev) => ({ ...prev, from: outVal, to: inVal }) });
   }
 
-  // useEffect(() => {
-  //   resetSwap();
-  //   form.reset();
-  // }, [selectedChain, resetSwap, form]);
-
   return (
     <form
       onSubmit={(e) => {
@@ -460,18 +512,16 @@ function SwapForm() {
           <div className="flex flex-row gap-2 items-center justify-between">
             <p className="text-muted-foreground">From</p>
             <div className="flex flex-row gap-2">
-              {(
-                [
-                  { label: "25%", num: BigInt(1), den: BigInt(4) },
-                  { label: "50%", num: BigInt(1), den: BigInt(2) },
-                  { label: "75%", num: BigInt(3), den: BigInt(4) },
-                  { label: "Max", num: BigInt(1), den: BigInt(1) },
-                ] as const
-              ).map(({ label }) => (
+              {AMOUNT_PRESETS.map(({ label, num, den }) => (
                 <button
                   key={label}
                   type="button"
                   className="text-xs hover:cursor-pointer underline underline-offset-4"
+                  onClick={() => {
+                    if (tokenInRawBalance === undefined) return;
+                    const amount = formatUnits((tokenInRawBalance * num) / den, tokenInDecimals);
+                    form.setFieldValue("amountIn", amount);
+                  }}
                 >
                   {label}
                 </button>
@@ -535,12 +585,16 @@ function SwapForm() {
           </div>
 
           {/* balance row */}
-          <TokenBalanceRow
-            tokenAddress={tokenIn}
-            tokens={tokens}
-            chainId={effectiveChain}
-            showRefresh
-          />
+          {tokenIn && (
+            <TokenBalanceRow
+              rawBalance={tokenInRawBalance}
+              decimals={tokenInDecimals}
+              symbol={tokenInSymbol}
+              isLoading={isLoadingTokenInBalance}
+              refetch={refetchTokenInBalance}
+              showRefresh
+            />
+          )}
         </div>
 
         {/* ── Flip ──────────────────────────────────────────────── */}
@@ -592,80 +646,76 @@ function SwapForm() {
           </div>
 
           {/* balance row */}
-          <TokenBalanceRow
-            tokenAddress={tokenOut}
-            tokens={tokens}
-            chainId={effectiveChain}
-            showRefresh
-          />
+          {tokenOut && (
+            <TokenBalanceRow
+              rawBalance={tokenOutRawBalance}
+              decimals={tokenOutDecimals}
+              symbol={tokenOutSymbol}
+              isLoading={isLoadingTokenOutBalance}
+              refetch={refetchTokenOutBalance}
+              showRefresh
+            />
+          )}
         </div>
         {/* ── Swap Info ───────────────────────────────── */}
         <div className="flex flex-col gap-2 border-t border-border pt-2">
-          <form.Subscribe selector={(state) => [state.canSubmit, state.isSubmitting]}>
-            {([isSubmitting]) => (
-              <div className="flex flex-row items-center justify-between">
-                <Button
-                  className="hover:cursor-pointer rounded-none"
-                  variant="outline"
-                  type="button"
-                  onClick={handleReset}
-                  disabled={isSubmitting}
-                >
-                  <Eraser /> Reset <Kbd>R</Kbd>
-                </Button>
-                <Button
-                  className="hover:cursor-pointer rounded-none"
-                  variant="outline"
-                  type="button"
-                  onClick={() => void zfiQuery.refetch()}
-                >
-                  <Quote /> Get Quotes <Kbd>Q</Kbd>
-                </Button>
-              </div>
-            )}
-          </form.Subscribe>
-          <RouteSelector zfiQuery={zfiQuery} onRouteChange={(route) => form.setFieldValue("route", route)} />
-          <div className="flex flex-row items-center justify-between text-xs">
-            <p className="text-muted-foreground">Rate</p>
-            <p>0%</p>
-          </div>
-          <div className="flex flex-row items-center justify-between text-xs">
-            <p className="text-muted-foreground">Gas fee</p>
-            <p>{gasFeeGwei !== null ? `${gasFeeGwei} ETH` : "—"}</p>
-          </div>
-          <div className="flex flex-row items-center justify-between text-xs">
+          <SwapGasFeeBox
+            gasFeeEth={gasFeeGwei}
+            nativeBalance={nativeBalance?.value}
+            nativeSymbol={nativeBalance?.symbol ?? "ETH"}
+          />
+          <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between text-xs gap-1 lg:gap-0">
             <p className="text-muted-foreground">Max slippage</p>
             <div className="flex items-center gap-1">
-              {/* preset buttons */}
-              {(["0.1", "0.5", "1"] as const).map((preset) => (
+              {SLIPPAGE_PRESETS.map((preset) => (
                 <button
                   key={preset}
                   type="button"
-                  onClick={() => { setSlippage(preset); setIsSlippageUserSet(true); setIsEditingSlippage(false); }}
-                  className={`px-1.5 py-0.5 border text-xs hover:cursor-pointer hover:bg-accent transition-colors ${slippage === preset && !isEditingSlippage ? "border-primary text-primary" : "border-input text-muted-foreground"}`}
+                  onClick={() => form.setFieldValue("slippage", preset)}
+                  className={`px-1.5 py-0.5 border text-xs hover:cursor-pointer hover:bg-accent transition-colors ${slippage === preset ? "border-primary text-primary" : "border-input text-muted-foreground"}`}
                 >
                   {preset}%
                 </button>
               ))}
-              {/* editable value — readOnly when not editing */}
-              <input
-                type="number"
-                inputMode="decimal"
-                value={slippage}
-                readOnly={!isEditingSlippage}
-                onChange={(e) => { setSlippage(e.target.value); setIsSlippageUserSet(true); }}
-                onBlur={() => setIsEditingSlippage(false)}
-                className="w-12 border border-input bg-transparent px-1.5 py-0.5 text-xs text-right outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none focus:border-primary"
-              />
-              <span className="text-muted-foreground">%</span>
-              {/* toggle edit mode */}
-              <button
-                type="button"
-                onClick={() => setIsEditingSlippage((prev) => !prev)}
-                className={`hover:cursor-pointer transition-colors ${isEditingSlippage ? "text-primary" : "text-muted-foreground hover:text-foreground"}`}
+              <form.Field
+                name="slippage"
+                validators={{
+                  onChange: ({ value }) => {
+                    if (!/^\d*\.?\d*$/.test(value)) return "Numbers only";
+                    const n = parseFloat(value);
+                    if (isNaN(n) || n <= 0) return "Must be greater than 0";
+                    if (n > 50) return "Must be 50% or less";
+                    return undefined;
+                  },
+                }}
               >
-                <Pencil className="w-3 h-3" />
-              </button>
+                {(field) => (
+                  isDesktop ? (
+                    <input
+                      id={field.name}
+                      name={field.name}
+                      type="number"
+                      value={field.state.value}
+                      onChange={(e) => field.handleChange(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === "Escape") e.currentTarget.blur(); }}
+                      className={`w-12 border bg-transparent px-1.5 py-0.5 text-xs text-right outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none focus:border-primary ${field.state.meta.errors.length ? "border-destructive" : "border-input"}`}
+                    />
+                  ) : (
+                    <input
+                      id={field.name}
+                      name={field.name}
+                      type="number"
+                      inputMode="decimal"
+                      pattern="[0-9]*"
+                      value={field.state.value}
+                      onChange={(e) => field.handleChange(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === "Escape") e.currentTarget.blur(); }}
+                      className={`w-12 border bg-transparent px-1.5 py-0.5 text-xs text-right outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none focus:border-primary ${field.state.meta.errors.length ? "border-destructive" : "border-input"}`}
+                    />
+                  )
+                )}
+              </form.Field>
+              <span className="text-muted-foreground">%</span>
             </div>
           </div>
           <div className="flex flex-row items-center justify-between text-xs">
@@ -676,7 +726,7 @@ function SwapForm() {
             <div className="flex flex-row items-center justify-between text-xs">
               <p className="text-muted-foreground">Approval</p>
               {supportsAtomicBatch ? (
-                <p className="text-green-500">Atomic batch</p>
+                <p className="text-green-500">Atomic</p>
               ) : (
                 <div className="flex flex-row items-center gap-2">
                   {isLoadingAllowance ? (
@@ -705,6 +755,31 @@ function SwapForm() {
               )}
             </div>
           )}
+          <form.Subscribe selector={(state) => ({ canSubmit: state.canSubmit, isSubmitting: state.isSubmitting })}>
+            {({ canSubmit, isSubmitting }) => (
+              <div className="flex flex-row items-center justify-between">
+                <Button
+                  className="hover:cursor-pointer rounded-none"
+                  variant="outline"
+                  type="button"
+                  onClick={handleReset}
+                  disabled={isSubmitting}
+                >
+                  <Eraser /> Reset <Kbd>R</Kbd>
+                </Button>
+                <Button
+                  className="hover:cursor-pointer rounded-none"
+                  variant="outline"
+                  type="button"
+                  onClick={() => void zfiQuery.refetch()}
+                  disabled={!canSubmit}
+                >
+                  <Quote /> Get Quotes <Kbd>Q</Kbd>
+                </Button>
+              </div>
+            )}
+          </form.Subscribe>
+          <RouteSelector zfiQuery={zfiQuery} onRouteChange={(route) => form.setFieldValue("route", route)} />
         </div>
 
         {/* ── Actions ───────────────────────────────────────────── */}
@@ -826,6 +901,32 @@ type AggregatorRoute = {
   amountOut: string;
 };
 
+function SwapGasFeeBox({
+  gasFeeEth,
+  nativeBalance,
+  nativeSymbol,
+}: {
+  gasFeeEth: string | null;
+  nativeBalance: bigint | undefined;
+  nativeSymbol: string;
+}) {
+  const formattedNativeBalance = nativeBalance !== undefined
+    ? formatUnits(nativeBalance, 18)
+    : null;
+
+  return (
+    <div className="flex flex-row items-start justify-between text-xs">
+      <p className="text-muted-foreground">Gas fee</p>
+      <div className="flex flex-col lg:flex-row items-end lg:items-center gap-0.5">
+        <p>{gasFeeEth !== null ? `${gasFeeEth}` : "—"}</p>
+        <div className="w-full h-px bg-border lg:hidden" />
+        <span className="hidden lg:inline text-muted-foreground">/</span>
+        <p className="text-muted-foreground">{formattedNativeBalance} {nativeSymbol}</p>
+      </div>
+    </div>
+  );
+}
+
 function RouteSelector({
   zfiQuery,
   onRouteChange,
@@ -852,117 +953,76 @@ function RouteSelector({
     const idx = bestIdx !== -1 ? bestIdx : 0;
     setSelectedIdx(idx);
     if (routes[idx]) onRouteChange?.(routes[idx]);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [zfiQuery.data]);
 
-  const selectedRoute = selectedIdx !== null ? routes[selectedIdx] : null;
-  const selectedLabel = selectedRoute?.aggregator ?? (zfiQuery.isPending ? "Loading…" : "—");
-
   return (
-    <Accordion className="mx-0">
-      <AccordionItem value="route">
-        <AccordionTrigger className="py-0 hover:no-underline">
-          <div className="flex flex-1 flex-row items-center justify-between pr-1 text-xs">
-            <p className="text-muted-foreground">Route</p>
-            {zfiQuery.isPending ? (
-              <Loader2 className="w-3 h-3 animate-spin text-muted-foreground" />
-            ) : (
-              <p>{selectedLabel}</p>
-            )}
-          </div>
-        </AccordionTrigger>
-        <AccordionContent>
-          <div className="flex flex-col gap-1 pt-1">
-            {zfiQuery.isPending && (
-              <div className="flex flex-col gap-1">
-                {[...Array(3)].map((_, i) => (
-                  <div key={i} className="flex flex-row items-center justify-between px-2 py-1.5">
-                    <Skeleton className="h-3 w-24" />
-                    <Skeleton className="h-3 w-16" />
-                  </div>
-                ))}
+    <div className="flex flex-col border border-border text-xs">
+      <div className="flex flex-row items-center justify-between px-2 py-1.5 border-b border-border">
+        <p className="text-muted-foreground">Route</p>
+        {zfiQuery.isFetching && <Loader2 className="w-3 h-3 animate-spin text-muted-foreground" />}
+      </div>
+      <div className="flex flex-col max-h-32 overflow-y-auto">
+        {zfiQuery.isFetching && (
+          <div className="flex flex-col">
+            {[...Array(3)].map((_, i) => (
+              <div key={i} className="flex flex-row items-center justify-between px-2 py-1.5">
+                <Skeleton className="h-3 w-24" />
+                <Skeleton className="h-3 w-16" />
               </div>
-            )}
-            {zfiQuery.isError && (
-              <p className="px-2 py-1.5 text-xs text-destructive">
-                Failed to fetch routes.
-              </p>
-            )}
-            {!zfiQuery.isPending && !zfiQuery.isError && routes.length === 0 && (
-              <p className="px-2 py-1.5 text-xs text-muted-foreground">
-                Enter an amount to see routes.
-              </p>
-            )}
-            {routes.map((route, idx) => {
-              const isBest = route.aggregator === bestSource && route.amountOut === bestAmountOut;
-              const isSelected = idx === selectedIdx;
-              return (
-                <button
-                  key={idx}
-                  type="button"
-                  onClick={() => { setSelectedIdx(idx); onRouteChange?.(route); }}
-                  className={`flex flex-row items-center justify-between px-2 py-1.5 text-xs transition-colors hover:bg-accent hover:cursor-pointer ${isSelected ? "bg-accent" : ""}`}
-                >
-                  <div className="flex flex-row items-center gap-2">
-                    <Check className={`w-3 h-3 shrink-0 ${isSelected ? "opacity-100" : "opacity-0"}`} />
-                    <span className="font-medium">{route.aggregator}</span>
-                    {isBest && <span className="text-green-500">best</span>}
-                  </div>
-                  <span>{route.amountOut}</span>
-                </button>
-              );
-            })}
+            ))}
           </div>
-        </AccordionContent>
-      </AccordionItem>
-    </Accordion>
+        )}
+        {zfiQuery.isError && (
+          <p className="px-2 py-1.5 text-destructive">Failed to fetch routes.</p>
+        )}
+        {!zfiQuery.isFetching && !zfiQuery.isError && routes.length === 0 && (
+          <p className="px-2 py-1.5 text-muted-foreground">Enter an amount to see routes.</p>
+        )}
+        {routes.map((route, idx) => {
+          const isBest = route.aggregator === bestSource && route.amountOut === bestAmountOut;
+          const isSelected = idx === selectedIdx;
+          return (
+            <button
+              key={idx}
+              type="button"
+              onClick={() => { setSelectedIdx(idx); onRouteChange?.(route); }}
+              className={`flex flex-row items-center justify-between px-2 py-1.5 transition-colors hover:bg-accent hover:cursor-pointer ${isSelected ? "bg-accent" : ""}`}
+            >
+              <div className="flex flex-row items-center gap-2">
+                <Check className={`w-3 h-3 shrink-0 ${isSelected ? "opacity-100" : "opacity-0"}`} />
+                <span className="font-medium">{route.aggregator}</span>
+                {isBest && <span className="text-green-500">best</span>}
+              </div>
+              <span>{route.amountOut}</span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 
 function TokenBalanceRow({
-  tokenAddress,
-  tokens,
-  chainId,
+  rawBalance,
+  decimals,
+  symbol,
+  isLoading,
+  refetch,
   showRefresh = false,
 }: {
-  tokenAddress: string;
-  tokens: TokenListToken[];
-  chainId: number | null;
+  rawBalance: bigint | undefined;
+  decimals: number;
+  symbol: string;
+  isLoading: boolean;
+  refetch: () => void;
   showRefresh?: boolean;
 }) {
-  const connection = useConnection();
-  const isNative = tokenAddress.toLowerCase() === ETH_ADDRESS.toLowerCase();
-  const tokenMeta = tokens.find((t) => t.address === tokenAddress);
-  const enabled = !!connection.address && !!chainId && !!tokenAddress;
-
-  const { data: ethData, isLoading: isLoadingEth, refetch: refetchEth } = useBalance({
-    address: connection.address,
-    chainId: chainId ?? undefined,
-    query: { enabled: enabled && isNative },
-  });
-
-  const { data: erc20Balance, isLoading: isLoadingErc20, refetch: refetchErc20 } = useReadContract({
-    address: tokenAddress as Address,
-    abi: erc20Abi,
-    functionName: "balanceOf",
-    args: [connection.address as Address],
-    chainId: chainId ?? undefined,
-    query: { enabled: enabled && !isNative },
-  });
-
-  const isLoading = isNative ? isLoadingEth : isLoadingErc20;
-  const refetch = isNative ? refetchEth : refetchErc20;
-
-  const decimals = isNative ? (ethData?.decimals ?? 18) : (tokenMeta?.decimals ?? 18);
-  const symbol = isNative ? (ethData?.symbol ?? "ETH") : (tokenMeta?.symbol ?? "");
-  const rawBalance = isNative ? ethData?.value : (erc20Balance as bigint | undefined);
   const formatted = rawBalance !== undefined ? formatUnits(rawBalance, decimals) : "0";
-
-  if (!tokenAddress) return null;
 
   return (
     <div className="flex flex-row items-center justify-between">
-      <div className="flex flex-row gap-2">
+      <div className="flex flex-row gap-2 text-xs">
         {isLoading ? (
           <Skeleton className="w-16 h-4" />
         ) : (
