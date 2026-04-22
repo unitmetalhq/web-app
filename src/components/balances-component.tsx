@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useAtom, useSetAtom } from "jotai";
 import { customTokensAtom } from "@/atoms/customTokensAtom";
 import type { TokenListToken } from "@/atoms/customTokensAtom";
@@ -76,21 +76,25 @@ export default function BalancesComponent() {
     staleTime: Infinity,
   });
 
-  const listTokens: TokenListToken[] = chainId
-    ? (tokenList?.tokens.filter(
-        (t) => t.chainId === chainId && t.address.toLowerCase() !== ETH_SENTINEL
-      ) ?? [])
-    : [];
-
-  const customForChain = customTokens.filter((t) => t.chainId === chainId);
-  const dedupedTokenListTokens = customForChain.filter(
-    (ct) => !listTokens.some((lt) => lt.address.toLowerCase() === ct.address.toLowerCase())
+  const customForChain = useMemo(
+    () => customTokens.filter((t) => t.chainId === chainId),
+    [customTokens, chainId],
   );
 
-  const allTokens: TokenWithMeta[] = [
-    ...listTokens.map((t) => ({ ...t, isVerified: true })),
-    ...dedupedTokenListTokens.map((t) => ({ ...t, isVerified: false })),
-  ];
+  const allTokens = useMemo<TokenWithMeta[]>(() => {
+    const listTokens: TokenListToken[] = chainId
+      ? (tokenList?.tokens.filter(
+          (t) => t.chainId === chainId && t.address.toLowerCase() !== ETH_SENTINEL
+        ) ?? [])
+      : [];
+    const dedupedCustom = customForChain.filter(
+      (ct) => !listTokens.some((lt) => lt.address.toLowerCase() === ct.address.toLowerCase())
+    );
+    return [
+      ...listTokens.map((t) => ({ ...t, isVerified: true as const })),
+      ...dedupedCustom.map((t) => ({ ...t, isVerified: false as const })),
+    ];
+  }, [tokenList, customForChain, chainId]);
 
   // ── Token balances ──────────────────────────────────────────────────────────
 
