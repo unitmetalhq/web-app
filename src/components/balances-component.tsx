@@ -1,8 +1,9 @@
-import { useState } from "react";
-import { useAtom } from "jotai";
+import { useEffect, useState } from "react";
+import { useAtom, useSetAtom } from "jotai";
 import { customTokensAtom } from "@/atoms/customTokensAtom";
 import type { TokenListToken } from "@/atoms/customTokensAtom";
 import { customNftsAtom } from "@/atoms/customNftsAtom";
+import { tokenBalancesAtom } from "@/atoms/tokenBalancesAtom";
 import type { NftCollection } from "@/atoms/customNftsAtom";
 import { useBalance, useConfig, useConnection, useReadContracts } from "wagmi";
 import { useQuery } from "@tanstack/react-query";
@@ -51,6 +52,7 @@ export default function BalancesComponent() {
   const config = useConfig();
   const connection = useConnection();
   const [customTokens, setTokenListTokens] = useAtom(customTokensAtom);
+  const setTokenBalances = useSetAtom(tokenBalancesAtom);
   const [customNfts, setCustomNfts] = useAtom(customNftsAtom);
   const [showAddTokenForm, setShowAddTokenForm] = useState(false);
   const [showAddNftForm, setShowAddNftForm] = useState(false);
@@ -113,6 +115,21 @@ export default function BalancesComponent() {
     chainId,
     query: { enabled: isQueryEnabled, refetchOnWindowFocus: false },
   });
+
+  useEffect(() => {
+    if (!tokenBalances && !nativeBalanceData) return;
+    const map = new Map<string, bigint>();
+    if (nativeBalanceData) {
+      map.set("0x0000000000000000000000000000000000000000", nativeBalanceData.value);
+    }
+    allTokens.forEach((token, i) => {
+      const raw = tokenBalances?.[i];
+      if (raw?.status === "success") {
+        map.set(token.address.toLowerCase(), raw.result as bigint);
+      }
+    });
+    setTokenBalances(map);
+  }, [tokenBalances, nativeBalanceData, allTokens, setTokenBalances]);
 
   // ── NFT list ────────────────────────────────────────────────────────────────
 

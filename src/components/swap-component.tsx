@@ -1,9 +1,8 @@
-import { useState, useEffect, useRef } from "react";
-import { useQuery, type UseQueryResult } from "@tanstack/react-query";
+import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useSearch, useNavigate } from "@tanstack/react-router";
 import { Button } from "@/components/ui/button";
 import { useForm, useStore } from "@tanstack/react-form";
-// import type { AnyFieldApi } from "@tanstack/react-form";
 import {
   Loader2,
   Check,
@@ -13,7 +12,9 @@ import {
   Quote,
 } from "lucide-react";
 import { type Address, type Hash, erc20Abi, encodeFunctionData, formatUnits, parseUnits, maxUint256 } from "viem";
-import { fetchZfiQuote, ZFI_ETH, type ZfiQuoteResponse } from "@/lib/swap-providers/zfi";
+import { useAtom, useAtomValue, useSetAtom } from "jotai";
+import { swapRouteAtom } from "@/atoms/swap-route";
+import { useZfiQuery } from "@/components/swap-zfi";
 import {
   useReadContract,
   useBalance,
@@ -31,8 +32,8 @@ import { TokenPickerDialog, type TokenListToken } from "@/components/token-picke
 import { Kbd } from "@/components/ui/kbd";
 import { TransactionStatus } from "@/components/transaction-status";
 import { InformationDialog } from "@/components/information-dialog";
+import { ETH_ADDRESS } from "@/lib/constants";
 
-const ETH_ADDRESS = '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE' as const;
 
 // ── Main swap component ──────────────────────────────────────
 export default function SwapComponent() {
@@ -98,18 +99,17 @@ function SwapForm() {
     capabilities?.[connection.chain?.id ?? 0]?.atomicBatch?.supported ?? false;
 
   const effectiveChain = search.chain ?? connection.chain?.id ?? null;
-  const tokens = effectiveChain
-    ? (tokenList?.tokens.filter((t) => t.chainId === effectiveChain) ?? [])
-    : [];
+  const tokens = useMemo(
+    () => effectiveChain ? (tokenList?.tokens.filter((t) => t.chainId === effectiveChain) ?? []) : [],
+    [tokenList, effectiveChain],
+  );
 
   const form = useForm({
     defaultValues: {
-      tokenIn: search.from,
+      tokenIn: search.from as string | undefined,
       tokenOut: search.to,
       amountIn: "",
-      amountOut: "",
       slippage: "0.1",
-      route: null as AggregatorRoute | null,
     },
     onSubmit: async ({ value }) => {
       // TODO: integrate DEX aggregator (e.g. 0x, Uniswap Universal Router)
@@ -117,13 +117,28 @@ function SwapForm() {
     },
   });
 
+  const handleSelectTokenIn = useCallback((address: string) => {
+    form.setFieldValue("tokenIn", address);
+    void navigate({ search: (prev) => ({ ...prev, from: address }) });
+  }, [form, navigate]);
+
+  const handleSelectTokenOut = useCallback((address: string) => {
+    form.setFieldValue("tokenOut", address);
+    void navigate({ search: (prev) => ({ ...prev, to: address }) });
+  }, [form, navigate]);
+
   const tokenIn = useStore(form.store, (state) => state.values.tokenIn);
   const tokenOut = useStore(form.store, (state) => state.values.tokenOut);
+  const amountIn = useStore(form.store, (state) => state.values.amountIn);
   const slippage = useStore(form.store, (state) => state.values.slippage);
-  const selectedRouteKey = useStore(form.store, (state) => {
-    const r = state.values.route;
-    return r ? `${r.aggregator}:${r.amountOut}` : null;
-  });
+  const canSubmit = useStore(form.store, (state) => state.canSubmit);
+
+  // Swap route atom — source of truth for quote results and selection
+  const swapRoute = useAtomValue(swapRouteAtom);
+  const setSwapRoute = useSetAtom(swapRouteAtom);
+  const selectedRouteKey = swapRoute.selected
+    ? `${swapRoute.selected.aggregator}:${swapRoute.selected.amountOut}`
+    : null;
   const tokenInMeta = tokens.find((t) => t.address === tokenIn);
   const tokenInDecimals =
     tokenIn?.toLowerCase() === ETH_ADDRESS.toLowerCase()
@@ -146,29 +161,20 @@ function SwapForm() {
     }
   }
 
-  const zfiQuery = useQuery({
-    queryKey: ["quote", "zfi", effectiveChain, tokenIn, tokenOut],
-    queryFn: () => {
-      const amount = getParsedAmountIn();
-      if (!amount) throw new Error("No amount");
-      return fetchZfiQuote({
-        tokenIn: tokenIn.toLowerCase() === ETH_ADDRESS.toLowerCase() ? ZFI_ETH : tokenIn,
-        tokenOut: tokenOut.toLowerCase() === ETH_ADDRESS.toLowerCase() ? ZFI_ETH : tokenOut,
-        amount,
-        to: connection.address,
-      });
-    },
-    enabled: false,
-    staleTime: 15_000,
-    retry: 1,
-  });
-
-  const rawAmountOut = zfiQuery.data?.bestRoute.expectedOutput;
-  const formattedAmountOut = rawAmountOut
-    ? formatUnits(BigInt(rawAmountOut), tokenOutDecimals)
+  const formattedAmountOut = swapRoute.selected?.amountOut
+    ? formatUnits(BigInt(swapRoute.selected.amountOut), tokenOutDecimals)
     : "";
 
-  const isLoadingQuote = zfiQuery.isFetching;
+  // ZFI on-chain quote — amountIn subscribed live so refetch always gets the current value
+  const { refetch: refetchQuote, isFetching: isFetchingQuote, isError: isErrorQuote } = useZfiQuery({
+    amountIn,
+    tokenInDecimals,
+    tokenIn,
+    tokenOut,
+    slippage,
+    recipient: connection.address,
+    chainId: effectiveChain,
+  });
 
   const isNativeTokenIn = tokenIn?.toLowerCase() === ETH_ADDRESS.toLowerCase();
   const isNativeTokenOut = tokenOut?.toLowerCase() === ETH_ADDRESS.toLowerCase();
@@ -224,7 +230,7 @@ function SwapForm() {
   const refetchTokenOutBalance = isNativeTokenOut ? refetchNativeBalance : refetchErc20TokenOut;
   const tokenOutSymbol = isNativeTokenOut ? (nativeBalance?.symbol ?? "ETH") : (tokenOutMeta?.symbol ?? "");
 
-  const approvalTarget = zfiQuery.data?.approvalTarget;
+  const approvalTarget = swapRoute.selected?.approvalTarget;
 
   // ── Allowance ────────────────────────────────────────────────────────────
   const {
@@ -345,7 +351,7 @@ function SwapForm() {
   } = useWaitForTransactionReceipt({ hash: swapTxHash });
 
   function handleSwap() {
-    const tx = zfiQuery.data?.tx;
+    const tx = swapRoute.selected?.tx;
     if (!tx) return;
     sendTransaction({
       to: tx.to,
@@ -373,8 +379,10 @@ function SwapForm() {
 
   function handleSwapAtomic() {
     const parsedAmountIn = getParsedAmountIn();
-    const tx = zfiQuery.data?.tx;
-    if (!tx || !approvalTarget || !parsedAmountIn) return;
+    const selected = swapRoute.selected;
+    const tx = selected?.tx;
+    const approvalTargetAddr = selected?.approvalTarget;
+    if (!tx || !approvalTargetAddr || !parsedAmountIn) return;
     sendCalls.mutate({
       calls: [
         {
@@ -382,7 +390,7 @@ function SwapForm() {
           data: encodeFunctionData({
             abi: erc20Abi,
             functionName: "approve",
-            args: [approvalTarget as Address, parsedAmountIn],
+            args: [approvalTargetAddr, parsedAmountIn],
           }),
         },
         {
@@ -405,6 +413,7 @@ function SwapForm() {
 
   function handleReset() {
     form.reset();
+    setSwapRoute({ selected: null, zfi: [] });
   }
 
   const handlersRef = useRef({
@@ -413,7 +422,7 @@ function SwapForm() {
     handleApproveUnlimited,
     handleRevoke,
     handleSwap: handleSwapDispatch,
-    refetchQuote: () => void zfiQuery.refetch(),
+    refetchQuote: () => void refetchQuote(),
     isSubmitting: () => form.state.isSubmitting,
   });
   useEffect(() => {
@@ -423,7 +432,7 @@ function SwapForm() {
       handleApproveUnlimited,
       handleRevoke,
       handleSwap: handleSwapDispatch,
-      refetchQuote: () => void zfiQuery.refetch(),
+      refetchQuote: () => void refetchQuote(),
       isSubmitting: () => form.state.isSubmitting,
     };
   });
@@ -475,6 +484,7 @@ function SwapForm() {
     form.setFieldValue("amountIn", "");
     navigate({ search: (prev) => ({ ...prev, from: outVal, to: inVal }) });
   }
+
 
   return (
     <form
@@ -547,14 +557,11 @@ function SwapForm() {
                   !value ? "Please select a token to sell" : undefined,
               }}
             >
-              {(field) => (
+              {() => (
                 <TokenPickerDialog
                   tokens={tokens}
-                  value={field.state.value}
-                  onSelect={(address) => {
-                    field.handleChange(address);
-                    navigate({ search: (prev) => ({ ...prev, from: address }) });
-                  }}
+                  value={tokenIn}
+                  onSelect={handleSelectTokenIn}
                   disabledAddress={tokenOut}
                   isLoading={isLoadingTokens}
                 />
@@ -596,7 +603,7 @@ function SwapForm() {
 
           {/* amount + token picker row */}
           <div className="flex flex-row items-center justify-between gap-2">
-            {isLoadingQuote ? (
+            {isFetchingQuote ? (
               <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
             ) : (
               <input
@@ -607,15 +614,13 @@ function SwapForm() {
                 value={formattedAmountOut}
               />
             )}
+
             <form.Field name="tokenOut">
-              {(field) => (
+              {() => (
                 <TokenPickerDialog
                   tokens={tokens}
-                  value={field.state.value}
-                  onSelect={(address) => {
-                    field.handleChange(address);
-                    navigate({ search: (prev) => ({ ...prev, to: address }) });
-                  }}
+                  value={tokenOut}
+                  onSelect={handleSelectTokenOut}
                   disabledAddress={tokenIn}
                   isLoading={isLoadingTokens}
                 />
@@ -728,8 +733,8 @@ function SwapForm() {
               )}
             </div>
           )}
-          <form.Subscribe selector={(state) => ({ canSubmit: state.canSubmit, isSubmitting: state.isSubmitting })}>
-            {({ canSubmit, isSubmitting }) => (
+          <form.Subscribe selector={(state) => ({ isSubmitting: state.isSubmitting })}>
+            {({ isSubmitting }) => (
               <div className="flex flex-row items-center justify-between">
                 <Button
                   className="hover:cursor-pointer rounded-none"
@@ -744,27 +749,34 @@ function SwapForm() {
                   className="hover:cursor-pointer rounded-none"
                   variant="outline"
                   type="button"
-                  onClick={() => void zfiQuery.refetch()}
-                  disabled={!canSubmit}
+                  onClick={() => void refetchQuote()}
+                  disabled={!canSubmit || isFetchingQuote}
                 >
-                  <Quote /> Get Quotes <Kbd>Q</Kbd>
+                  {isFetchingQuote
+                    ? <Loader2 className="w-3 h-3 animate-spin" />
+                    : <Quote className="w-3 h-3" />}
+                  Get Quotes <Kbd>Q</Kbd>
                 </Button>
               </div>
             )}
           </form.Subscribe>
-          <RouteSelector zfiQuery={zfiQuery} onRouteChange={(route) => form.setFieldValue("route", route)} />
+          <SwapRouteSelector
+            tokenOutDecimals={tokenOutDecimals}
+            isFetching={isFetchingQuote}
+            isError={isErrorQuote}
+          />
         </div>
 
         {/* ── Actions ───────────────────────────────────────────── */}
         <div className="flex flex-col gap-2 pt-6">
-          <form.Subscribe selector={(state) => [state.canSubmit]}>
-            {([canSubmit]) => {
+          <form.Subscribe selector={(state) => ({ canSubmit: state.canSubmit })}>
+            {({ canSubmit }) => {
               const isApproving = isApprovePending || isApproveConfirming;
               const isSwapping =
                 isSwapPending || isSwapConfirming || sendCalls.isPending || isBatchConfirming;
               const canSwap =
                 canSubmit &&
-                !!zfiQuery.data &&
+                !!swapRoute.selected &&
                 (isAllowanceSufficient || supportsAtomicBatch) &&
                 !isSwapping;
               const canApprove = canSubmit && !!approvalTarget && !isApproving;
@@ -869,90 +881,6 @@ function SwapForm() {
   );
 }
 
-type AggregatorRoute = {
-  aggregator: string;
-  amountOut: string;
-};
-
-function RouteSelector({
-  zfiQuery,
-  onRouteChange,
-}: {
-  zfiQuery: UseQueryResult<ZfiQuoteResponse>;
-  onRouteChange?: (route: AggregatorRoute) => void;
-}) {
-  const bestSource = zfiQuery.data?.bestRoute.source;
-  const bestAmountOut = zfiQuery.data?.bestRoute.expectedOutput;
-
-  const routes: AggregatorRoute[] = (zfiQuery.data?.allQuotes ?? []).map((q) => ({
-    aggregator: q.source,
-    amountOut: q.amountOut,
-  }));
-
-  const [selectedIdx, setSelectedIdx] = useState<number | null>(null);
-
-  // Auto-select best route when data arrives
-  useEffect(() => {
-    if (!zfiQuery.data) return;
-    const bestIdx = routes.findIndex(
-      (r) => r.aggregator === bestSource && r.amountOut === bestAmountOut
-    );
-    const idx = bestIdx !== -1 ? bestIdx : 0;
-    setSelectedIdx(idx);
-    if (routes[idx]) onRouteChange?.(routes[idx]);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [zfiQuery.data]);
-
-  return (
-    <div className="flex flex-col border border-primary text-xs">
-      <div className="flex flex-row items-center justify-between px-2 py-1.5 border-b border-primary">
-        <div className="flex flex-row gap-2">
-          <p>Swap Routes</p>
-          <InformationDialog title="Swap Routes" content="Select a route provider below to swap. Routes are sorted by the best output amount." />
-        </div>
-        {zfiQuery.isFetching && <Loader2 className="w-3 h-3 animate-spin text-muted-foreground" />}
-      </div>
-      <div className="flex flex-col max-h-32 overflow-y-auto">
-        {zfiQuery.isFetching && (
-          <div className="flex flex-col">
-            {[...Array(3)].map((_, i) => (
-              <div key={i} className="flex flex-row items-center justify-between px-2 py-1.5">
-                <Skeleton className="h-3 w-24" />
-                <Skeleton className="h-3 w-16" />
-              </div>
-            ))}
-          </div>
-        )}
-        {zfiQuery.isError && (
-          <p className="px-2 py-1.5 text-destructive">Failed to fetch routes.</p>
-        )}
-        {!zfiQuery.isFetching && !zfiQuery.isError && routes.length === 0 && (
-          <p className="px-2 py-1.5 text-muted-foreground">Enter an amount to see routes.</p>
-        )}
-        {routes.map((route, idx) => {
-          const isBest = route.aggregator === bestSource && route.amountOut === bestAmountOut;
-          const isSelected = idx === selectedIdx;
-          return (
-            <button
-              key={idx}
-              type="button"
-              onClick={() => { setSelectedIdx(idx); onRouteChange?.(route); }}
-              className={`flex flex-row items-center justify-between px-2 py-1.5 transition-colors hover:bg-accent hover:cursor-pointer ${isSelected ? "bg-accent" : ""}`}
-            >
-              <div className="flex flex-row items-center gap-2">
-                <Check className={`w-3 h-3 shrink-0 ${isSelected ? "opacity-100" : "opacity-0"}`} />
-                <span className="font-medium">{route.aggregator}</span>
-                {isBest && <span className="text-green-500">best</span>}
-              </div>
-              <span>{route.amountOut}</span>
-            </button>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
 function TokenBalanceRow({
   rawBalance,
   decimals,
@@ -995,6 +923,68 @@ function TokenBalanceRow({
           )}
         </Button>
       )}
+    </div>
+  );
+}
+
+function SwapRouteSelector({
+  tokenOutDecimals,
+  isFetching,
+  isError,
+}: {
+  tokenOutDecimals: number;
+  isFetching: boolean;
+  isError: boolean;
+}) {
+  const [swapRoute, setSwapRoute] = useAtom(swapRouteAtom);
+  const routes = swapRoute.zfi;
+
+  return (
+    <div className="flex flex-col border border-primary text-xs">
+      <div className="flex flex-row items-center gap-2 px-2 py-1.5 border-b border-primary">
+        <p>Swap Routes</p>
+        <InformationDialog
+          title="Swap Routes"
+          content="Select a route provider below to swap. Routes are sorted by the best output amount."
+        />
+      </div>
+      <div className="flex flex-col max-h-32 overflow-y-auto">
+        {isFetching && (
+          <div className="flex flex-col">
+            {[...Array(1)].map((_, i) => (
+              <div key={i} className="flex flex-row items-center justify-between px-2 py-1.5">
+                <Skeleton className="h-3 w-24" />
+                <Skeleton className="h-3 w-16" />
+              </div>
+            ))}
+          </div>
+        )}
+        {isError && !isFetching && (
+          <p className="px-2 py-1.5 text-destructive">Failed to fetch routes.</p>
+        )}
+        {!isFetching && !isError && routes.length === 0 && (
+          <p className="px-2 py-1.5 text-muted-foreground">Enter an amount and get quotes.</p>
+        )}
+        {!isFetching && routes.map((route, idx) => {
+          const isSelected = swapRoute.selected?.aggregator === route.aggregator;
+          const formatted = formatUnits(BigInt(route.amountOut), tokenOutDecimals);
+
+          return (
+            <button
+              key={idx}
+              type="button"
+              onClick={() => setSwapRoute((prev) => ({ ...prev, selected: route }))}
+              className={`flex flex-row items-center justify-between px-2 py-1.5 transition-colors hover:bg-accent hover:cursor-pointer ${isSelected ? "bg-accent" : ""}`}
+            >
+              <div className="flex flex-row items-center gap-2">
+                <Check className={`w-3 h-3 shrink-0 ${isSelected ? "opacity-100" : "opacity-0"}`} />
+                <span className="font-medium">{route.aggregator}</span>
+              </div>
+              <span>{formatted}</span>
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }

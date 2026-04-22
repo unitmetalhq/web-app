@@ -1,10 +1,8 @@
-import { useState } from "react";
+import { memo, useMemo, useState } from "react";
 import { useAtomValue } from "jotai";
-import { useReadContracts, useConnection } from "wagmi";
-import { erc20Abi } from "viem";
-import type { Address } from "viem";
 import { Loader2, ChevronDown, BadgeCheck } from "lucide-react";
 import { customTokensAtom } from "@/atoms/customTokensAtom";
+import { tokenBalancesAtom } from "@/atoms/tokenBalancesAtom";
 import {
   Dialog,
   DialogClose,
@@ -51,7 +49,38 @@ export type TokenListToken = {
 //   disabledAddress — address that should be un-selectable (e.g. swap pair)
 //   isLoading       — shows a spinner on the trigger while the list loads
 
-export function TokenPickerDialog({
+function TokenRow({
+  token,
+  disabled,
+  onSelect,
+}: {
+  token: TokenListToken & { isVerified: boolean };
+  disabled: boolean;
+  onSelect: (address: string) => void;
+}) {
+  return (
+    <DialogClose
+      disabled={disabled}
+      render={
+        <button
+          type="button"
+          onClick={() => onSelect(token.address)}
+          className="flex items-center justify-between px-2.5 py-2 text-xs text-left hover:bg-accent transition-colors disabled:opacity-40 disabled:cursor-not-allowed hover:cursor-pointer"
+        />
+      }
+    >
+      <div className="flex items-center gap-1">
+        <span className="font-medium">{token.symbol}</span>
+        {token.isVerified && (
+          <BadgeCheck className="w-3 h-3 text-muted-foreground" />
+        )}
+      </div>
+      <span className="text-muted-foreground">{token.name}</span>
+    </DialogClose>
+  );
+}
+
+export const TokenPickerDialog = memo(function TokenPickerDialog({
   tokens,
   value,
   onSelect,
@@ -59,77 +88,61 @@ export function TokenPickerDialog({
   isLoading,
 }: {
   tokens: TokenListToken[];
-  value: string;
+  value: string | undefined;
   onSelect: (address: string) => void;
   disabledAddress?: string;
   isLoading?: boolean;
 }) {
   const [search, setSearch] = useState("");
 
-  const { address } = useConnection();
   const customTokens = useAtomValue(customTokensAtom);
+  const tokenBalances = useAtomValue(tokenBalancesAtom);
 
   // Derive chainId from the passed list — all tokens are pre-filtered to the
   // same chain by the caller, so the first entry is representative.
   const chainId = tokens[0]?.chainId;
 
   // ── Merge custom tokens ───────────────────────────────────────────────────
-  // Filter custom tokens to the same chain and remove any already in the list.
-  const customForChain = customTokens.filter((t) => t.chainId === chainId);
-  const dedupedCustom = customForChain.filter(
-    (ct) => !tokens.some((lt) => lt.address.toLowerCase() === ct.address.toLowerCase())
+  const allTokens = useMemo<(TokenListToken & { isVerified: boolean })[]>(() => {
+    const customForChain = customTokens.filter((t) => t.chainId === chainId);
+    const dedupedCustom = customForChain.filter(
+      (ct) => !tokens.some((lt) => lt.address.toLowerCase() === ct.address.toLowerCase())
+    );
+    return [
+      ...tokens.map((t) => ({ ...t, isVerified: t.isVerified ?? true })),
+      ...dedupedCustom.map((t) => ({ ...t, isVerified: false })),
+    ];
+  }, [tokens, customTokens, chainId]);
+
+  const selected = useMemo(
+    () => value ? allTokens.find((t) => t.address.toLowerCase() === value.toLowerCase()) : undefined,
+    [allTokens, value],
   );
 
-  const allTokens: (TokenListToken & { isVerified: boolean })[] = [
-    ...tokens.map((t) => ({ ...t, isVerified: t.isVerified ?? true })),
-    ...dedupedCustom.map((t) => ({ ...t, isVerified: false })),
-  ];
+  // ── Split into "your tokens" (balance > 0) and "other tokens" ────────────
+  const { yourTokens, otherTokens } = useMemo(() => {
+    const q = search.toLowerCase();
+    const matches = (t: TokenListToken) =>
+      t.symbol.toLowerCase().includes(q) || t.name.toLowerCase().includes(q);
 
-  // ── Balance query ─────────────────────────────────────────────────────────
-  // Same contracts array order as balances-component.tsx → shared wagmi cache.
-  const { data: tokenBalances } = useReadContracts({
-    contracts: allTokens.map((token) => ({
-      address: token.address,
-      abi: erc20Abi,
-      functionName: "balanceOf" as const,
-      args: [address!] as [Address],
-      chainId,
-    })),
-    query: {
-      enabled: !!address && !!chainId && allTokens.length > 0,
-      refetchOnMount: false,
-    },
-  });
+    const yours: (TokenListToken & { isVerified: boolean })[] = [];
+    const others: (TokenListToken & { isVerified: boolean })[] = [];
 
-  const balanceMap = new Map<string, bigint>();
-  allTokens.forEach((token, i) => {
-    const raw = tokenBalances?.[i];
-    if (raw?.status === "success") {
-      balanceMap.set(token.address.toLowerCase(), raw.result as bigint);
+    for (const t of allTokens) {
+      if (!matches(t)) continue;
+      const bal = tokenBalances.get(t.address.toLowerCase()) ?? 0n;
+      if (bal > 0n) yours.push(t);
+      else others.push(t);
     }
-  });
 
-  // ── Sort: non-zero balance first (desc), then preserve list order ─────────
-  const sortedTokens = [...allTokens].sort((a, b) => {
-    const balA = balanceMap.get(a.address.toLowerCase()) ?? 0n;
-    const balB = balanceMap.get(b.address.toLowerCase()) ?? 0n;
-    if (balA > 0n && balB === 0n) return -1;
-    if (balA === 0n && balB > 0n) return 1;
-    if (balA !== balB) return balA > balB ? -1 : 1;
-    return 0;
-  });
+    yours.sort((a, b) => {
+      const balA = tokenBalances.get(a.address.toLowerCase())!;
+      const balB = tokenBalances.get(b.address.toLowerCase())!;
+      return balA > balB ? -1 : balA < balB ? 1 : 0;
+    });
 
-  // Use allTokens (unsorted) for the selected label so it doesn't flicker
-  // while balances are loading.
-  const selected = allTokens.find(
-    (t) => t.address.toLowerCase() === value.toLowerCase()
-  );
-
-  const filtered = sortedTokens.filter(
-    (t) =>
-      t.symbol.toLowerCase().includes(search.toLowerCase()) ||
-      t.name.toLowerCase().includes(search.toLowerCase())
-  );
+    return { yourTokens: yours, otherTokens: others };
+  }, [allTokens, tokenBalances, search]);
 
   return (
     <Dialog onOpenChange={(open) => { if (!open) setSearch(""); }}>
@@ -164,33 +177,40 @@ export function TokenPickerDialog({
           className="w-full border border-input bg-transparent px-2.5 py-2 text-xs outline-none placeholder:text-muted-foreground"
         />
         <div className="flex flex-col max-h-64 overflow-y-auto">
-          {filtered.length === 0 ? (
+          {yourTokens.length === 0 && otherTokens.length === 0 ? (
             <p className="px-2.5 py-2 text-xs text-muted-foreground">No tokens found</p>
           ) : (
-            filtered.map((token) => (
-              <DialogClose
-                key={token.address}
-                disabled={token.address === disabledAddress}
-                render={
-                  <button
-                    type="button"
-                    onClick={() => onSelect(token.address)}
-                    className="flex items-center justify-between px-2.5 py-2 text-xs text-left hover:bg-accent transition-colors disabled:opacity-40 disabled:cursor-not-allowed hover:cursor-pointer"
-                  />
-                }
-              >
-                <div className="flex items-center gap-1">
-                  <span className="font-medium">{token.symbol}</span>
-                  {token.isVerified && (
-                    <BadgeCheck className="w-3 h-3 text-muted-foreground" />
-                  )}
-                </div>
-                <span className="text-muted-foreground">{token.name}</span>
-              </DialogClose>
-            ))
+            <>
+              {yourTokens.length > 0 && (
+                <>
+                  <p className="px-2.5 py-1 text-xs text-muted-foreground border-b border-accent">Your tokens</p>
+                  {yourTokens.map((token) => (
+                    <TokenRow
+                      key={token.address}
+                      token={token}
+                      disabled={token.address === disabledAddress}
+                      onSelect={onSelect}
+                    />
+                  ))}
+                </>
+              )}
+              {otherTokens.length > 0 && (
+                <>
+                  <p className="px-2.5 py-1 text-xs text-muted-foreground border-b border-accent mt-2">Other tokens</p>
+                  {otherTokens.map((token) => (
+                    <TokenRow
+                      key={token.address}
+                      token={token}
+                      disabled={token.address === disabledAddress}
+                      onSelect={onSelect}
+                    />
+                  ))}
+                </>
+              )}
+            </>
           )}
         </div>
       </DialogContent>
     </Dialog>
   );
-}
+});

@@ -1,6 +1,8 @@
 {
   "name": "Ethereum NFT List",
   "timestamp": "2026-04-06T00:00:00Z",
+  "version": "0.0.1",
+  "tags": {},
   "collections": [
     {
       "chainId": 1,

@@ -3,16 +3,12 @@ import SwapComponent from '@/components/swap-component'
 import BalancesComponent from '@/components/balances-component'
 
 
-// Native ETH address per EIP-7528: https://eips.ethereum.org/EIPS/eip-7528
-const ETH_ADDRESS = '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE'
-const USDC_MAINNET = '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48'
-
 export const Route = createFileRoute('/swap')({
   component: SwapPage,
   validateSearch: (search: Record<string, unknown>) => ({
     chain: Number(search.chain) || 1,
-    from: String(search.from ?? ETH_ADDRESS),
-    to: String(search.to ?? USDC_MAINNET),
+    from: search.from ? String(search.from) : undefined,
+    to: search.to ? String(search.to) : undefined,
   }),
 })
 
