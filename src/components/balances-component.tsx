@@ -23,6 +23,25 @@ import AddTokenListToken from "@/components/add-custom-token";
 import AddCustomNft from "@/components/add-custom-nft";
 
 const ETH_SENTINEL = "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+const NATIVE_PRICE_KEY = "0x0000000000000000000000000000000000000000";
+
+const CHAIN_ID_TO_PRICE_SLUG: Record<number, string> = {
+  1: "ethereum",
+  8453: "base",
+  42161: "arbitrum",
+  130: "unichain",
+};
+
+type PriceEntry = { chainId: number; address: string; price: string | null };
+
+function formatUsd(amount: number): string {
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: amount !== 0 && Math.abs(amount) < 1 ? 6 : 2,
+  }).format(amount);
+}
 
 const erc721EnumerableAbi = [
   {
@@ -95,6 +114,31 @@ export default function BalancesComponent() {
       ...dedupedCustom.map((t) => ({ ...t, isVerified: false as const })),
     ];
   }, [tokenList, customForChain, chainId]);
+
+  // ── Prices ──────────────────────────────────────────────────────────────────
+
+  const priceSlug = chainId ? CHAIN_ID_TO_PRICE_SLUG[chainId] : undefined;
+
+  const { data: priceData } = useQuery({
+    queryKey: ["prices", priceSlug],
+    queryFn: async () => {
+      const res = await fetch(`${import.meta.env.VITE_UNITMETAL_API_URL}/prices/${priceSlug}`);
+      if (!res.ok) throw new Error("Failed to fetch prices");
+      return res.json() as Promise<PriceEntry[]>;
+    },
+    enabled: !!priceSlug,
+    staleTime: 60_000,
+  });
+
+  const priceMap = useMemo(() => {
+    const map = new Map<string, string>();
+    priceData?.forEach((p) => {
+      if (p.price === null) return;
+      if (Number(p.price) === 0) return;
+      map.set(p.address.toLowerCase(), p.price);
+    });
+    return map;
+  }, [priceData]);
 
   // ── Token balances ──────────────────────────────────────────────────────────
 
@@ -277,6 +321,7 @@ export default function BalancesComponent() {
                   isLoading={isQueryEnabled && isLoadingNative}
                   isError={isQueryEnabled && isErrorNative}
                   onRefresh={refetchNative}
+                  price={priceMap.get(NATIVE_PRICE_KEY)}
                 />
               </div>
 
@@ -311,6 +356,7 @@ export default function BalancesComponent() {
                           isVerified={token.isVerified}
                           onRefresh={refetchTokens}
                           onRemove={token.isVerified ? undefined : () => handleRemoveTokenListToken(token.address)}
+                          price={priceMap.get(token.address.toLowerCase())}
                         />
                       );
                     })}
@@ -423,6 +469,7 @@ function NativeBalanceRow({
   isLoading,
   isError,
   onRefresh,
+  price,
 }: {
   name: string;
   symbol: string;
@@ -431,6 +478,7 @@ function NativeBalanceRow({
   isLoading: boolean;
   isError: boolean;
   onRefresh: () => void;
+  price?: string;
 }) {
   return (
     <BalanceRow
@@ -441,6 +489,7 @@ function NativeBalanceRow({
       isError={isError}
       isVerified={true}
       onRefresh={onRefresh}
+      price={price}
     />
   );
 }
@@ -457,6 +506,7 @@ function BalanceRow({
   isVerified,
   onRefresh,
   onRemove,
+  price,
 }: {
   name: string;
   symbol: string;
@@ -467,6 +517,7 @@ function BalanceRow({
   isVerified: boolean;
   onRefresh: () => void;
   onRemove?: () => void;
+  price?: string;
 }) {
   const [copied, setCopied] = useState(false);
 
@@ -497,7 +548,9 @@ function BalanceRow({
         <p className="text-sm text-muted-foreground">-- %</p>
       </div>
       <div className="flex flex-col gap-1 text-right">
-        <p className="text-sm text-muted-foreground">$ --</p>
+        <p className="text-sm text-muted-foreground">
+          {price ? formatUsd(Number(price) * Number(value)) : "$ --"}
+        </p>
         <div className="flex flex-row gap-2 items-center justify-end">
           {isLoading ? (
             <Skeleton className="w-10 h-4" />
