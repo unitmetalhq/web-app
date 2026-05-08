@@ -4,7 +4,7 @@ import { useSetAtom } from "jotai";
 import { type Address, parseUnits } from "viem";
 import { ZQUOTER, ZROUTER, ETH_ADDRESS } from "@/lib/constants";
 import { ZQUOTER_ABI } from "@/lib/abis/zquoter-abi";
-import { swapRouteAtom } from "@/atoms/swap-route";
+import { swapRouteAtom, pickBestRoute } from "@/atoms/swap-route";
 
 // ── useZfiQuery ────────────────────────────────────────────────────────────────
 //
@@ -209,11 +209,20 @@ export function useZfiQuery({
         // contract that executes the swap.
         approvalTarget: ZROUTER as Address,
       };
-      setSwapRoute({ zfi: [route], selected: route });
+      // Functional update so the swapagg slice (and any user state) is preserved.
+      // Selected is recomputed to the best route across every source so a
+      // late-arriving zFi quote can promote itself if it beats the aggregator.
+      setSwapRoute((prev) => {
+        const next = { ...prev, zfi: [route] };
+        return { ...next, selected: pickBestRoute(next) };
+      });
     } else {
       // The quoter returned zero output (e.g. no liquidity, amountIn was 0n,
-      // or tokenIn === tokenOut). Clear the atom so the UI shows no route.
-      setSwapRoute({ zfi: [], selected: null });
+      // or tokenIn === tokenOut). Clear only the zFi slice and re-pick best.
+      setSwapRoute((prev) => {
+        const next = { ...prev, zfi: [] };
+        return { ...next, selected: pickBestRoute(next) };
+      });
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query.data]);

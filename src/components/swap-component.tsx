@@ -13,8 +13,11 @@ import {
 } from "lucide-react";
 import { type Address, type Hash, erc20Abi, encodeFunctionData, formatUnits, parseUnits, maxUint256 } from "viem";
 import { useAtom, useAtomValue, useSetAtom } from "jotai";
-import { swapRouteAtom } from "@/atoms/swap-route";
-import { useZfiQuery } from "@/components/swap-zfi";
+import { swapRouteAtom, pickBestRoute } from "@/atoms/swap-route";
+// TODO: re-enable zFi once fee logic is implemented — without fees its quotes
+// are inflated relative to fee-charging aggregators and skew "best route".
+// import { useZfiQuery } from "@/components/swap-zfi";
+import { fetchSwapAgg, isSwapAggSupported } from "@/components/swap-umagg-api";
 import {
   useReadContract,
   useBalance,
@@ -165,16 +168,85 @@ function SwapForm() {
     ? formatUnits(BigInt(swapRoute.selected.amountOut), tokenOutDecimals)
     : "";
 
-  // ZFI on-chain quote — amountIn subscribed live so refetch always gets the current value
-  const { refetch: refetchQuote, isFetching: isFetchingQuote, isError: isErrorQuote } = useZfiQuery({
-    amountIn,
-    tokenInDecimals,
-    tokenIn,
-    tokenOut,
-    slippage,
-    recipient: connection.address,
-    chainId: effectiveChain,
+  // ZFI on-chain quote — TEMPORARILY DISABLED until fee logic ships. Stubs are
+  // kept so downstream call sites and the atom shape are unchanged; flip the
+  // import + this block back on (and re-add `refetchQuote` to handleRefetchAll)
+  // to restore.
+  // const { refetch: refetchQuote, isFetching: isFetchingQuote, isError: isErrorQuote } = useZfiQuery({
+  //   amountIn,
+  //   tokenInDecimals,
+  //   tokenIn,
+  //   tokenOut,
+  //   slippage,
+  //   recipient: connection.address,
+  //   chainId: effectiveChain,
+  // });
+
+  // ── Off-chain aggregator quote (POST /swapagg/{chain}) ────────────────────
+  //
+  // Fallback / sibling to the on-chain zFi quoter. zFi's RPC routes and these
+  // API routes are tracked as separate atom slices and rendered side-by-side —
+  // amountOut is only compared to decide which one gets auto-selected.
+  //
+  // Manual-only: `enabled: false` keeps the call from firing on input changes,
+  // and the user triggers it by clicking "Get Quotes" (same UX as zFi).
+  // queryKey is built from the parsed wei amount so equal inputs hit the
+  // 15-second cache instead of re-billing the upstream aggregator.
+  const swapAggParsedAmountIn = (() => {
+    try {
+      return amountIn ? parseUnits(amountIn, tokenInDecimals).toString() : "0";
+    } catch {
+      return "0";
+    }
+  })();
+  const swapAggSlippageBps = Math.min(
+    2000,
+    Math.max(0, Math.round(parseFloat(slippage) * 100) || 50),
+  );
+  const swapAggEnabled =
+    isSwapAggSupported(effectiveChain) &&
+    !!connection.address &&
+    !!tokenIn &&
+    !!tokenOut &&
+    swapAggParsedAmountIn !== "0";
+
+  const swapAggQuery = useQuery({
+    queryKey: [
+      "swapagg",
+      effectiveChain,
+      tokenIn,
+      tokenOut,
+      swapAggParsedAmountIn,
+      swapAggSlippageBps,
+      connection.address,
+    ],
+    queryFn: () =>
+      fetchSwapAgg({
+        chainId: effectiveChain as number,
+        tokenIn: tokenIn as string,
+        tokenOut: tokenOut as string,
+        amountIn: swapAggParsedAmountIn,
+        sender: connection.address as string,
+        recipient: connection.address as string,
+        slippageBps: swapAggSlippageBps,
+      }),
+    enabled: false,
+    staleTime: 15_000,
+    retry: 1,
   });
+
+  // Mirror the React Query result into the atom so SwapRouteSelector and the
+  // swap-execution path can read all routes (zFi + swapagg) from one place.
+  // Functional update preserves the zFi slice; selected is recomputed across
+  // both sources so a late-arriving aggregator route can promote itself if
+  // its amountOut beats zFi's.
+  useEffect(() => {
+    if (swapAggQuery.data === undefined) return;
+    setSwapRoute((prev) => {
+      const next = { ...prev, swapagg: swapAggQuery.data ?? [] };
+      return { ...next, selected: pickBestRoute(next) };
+    });
+  }, [swapAggQuery.data, setSwapRoute]);
 
   const isNativeTokenIn = tokenIn?.toLowerCase() === ETH_ADDRESS.toLowerCase();
   const isNativeTokenOut = tokenOut?.toLowerCase() === ETH_ADDRESS.toLowerCase();
@@ -413,8 +485,17 @@ function SwapForm() {
 
   function handleReset() {
     form.reset();
-    setSwapRoute({ selected: null, zfi: [] });
+    setSwapRoute({ selected: null, zfi: [], swapagg: [] });
   }
+
+  // "Get Quotes" trigger. While zFi is disabled this only refetches the
+  // aggregator; once zFi is restored, also call its refetch here.
+  function handleRefetchAll() {
+    if (swapAggEnabled) void swapAggQuery.refetch();
+  }
+
+  const isFetchingAnyQuote = swapAggQuery.isFetching;
+  const isErrorAllQuotes = swapAggEnabled && swapAggQuery.isError;
 
   const handlersRef = useRef({
     handleReset,
@@ -422,7 +503,7 @@ function SwapForm() {
     handleApproveUnlimited,
     handleRevoke,
     handleSwap: handleSwapDispatch,
-    refetchQuote: () => void refetchQuote(),
+    refetchQuote: handleRefetchAll,
     isSubmitting: () => form.state.isSubmitting,
   });
   useEffect(() => {
@@ -432,7 +513,7 @@ function SwapForm() {
       handleApproveUnlimited,
       handleRevoke,
       handleSwap: handleSwapDispatch,
-      refetchQuote: () => void refetchQuote(),
+      refetchQuote: handleRefetchAll,
       isSubmitting: () => form.state.isSubmitting,
     };
   });
@@ -603,7 +684,7 @@ function SwapForm() {
 
           {/* amount + token picker row */}
           <div className="flex flex-row items-center justify-between gap-2">
-            {isFetchingQuote ? (
+            {isFetchingAnyQuote ? (
               <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
             ) : (
               <input
@@ -749,10 +830,10 @@ function SwapForm() {
                   className="hover:cursor-pointer rounded-none"
                   variant="outline"
                   type="button"
-                  onClick={() => void refetchQuote()}
-                  disabled={!canSubmit || isFetchingQuote}
+                  onClick={handleRefetchAll}
+                  disabled={!canSubmit || isFetchingAnyQuote}
                 >
-                  {isFetchingQuote
+                  {isFetchingAnyQuote
                     ? <Loader2 className="w-3 h-3 animate-spin" />
                     : <Quote className="w-3 h-3" />}
                   Get Quotes <Kbd>Q</Kbd>
@@ -762,8 +843,8 @@ function SwapForm() {
           </form.Subscribe>
           <SwapRouteSelector
             tokenOutDecimals={tokenOutDecimals}
-            isFetching={isFetchingQuote}
-            isError={isErrorQuote}
+            isFetching={isFetchingAnyQuote}
+            isError={isErrorAllQuotes}
           />
         </div>
 
@@ -937,7 +1018,15 @@ function SwapRouteSelector({
   isError: boolean;
 }) {
   const [swapRoute, setSwapRoute] = useAtom(swapRouteAtom);
-  const routes = swapRoute.zfi;
+  // zFi (RPC) and swapagg (API fallback) routes are tracked in separate
+  // slices so both are visible side-by-side. Merge for display only and sort
+  // by amountOut desc — the best route surfaces at the top regardless of
+  // which source produced it.
+  const routes = useMemo(() => {
+    return [...swapRoute.zfi, ...swapRoute.swapagg].sort((a, b) =>
+      BigInt(a.amountOut) > BigInt(b.amountOut) ? -1 : 1,
+    );
+  }, [swapRoute.zfi, swapRoute.swapagg]);
 
   return (
     <div className="flex flex-col border border-primary text-xs">
@@ -945,7 +1034,7 @@ function SwapRouteSelector({
         <p>Swap Routes</p>
         <InformationDialog
           title="Swap Routes"
-          content="Select a route provider below to swap. Routes are sorted by the best output amount."
+          content="Select a route provider below to swap. Routes are sorted by the best output amount. zFi routes come from the on-chain quoter; other routes come from the swap aggregator API."
         />
       </div>
       <div className="flex flex-col max-h-32 overflow-y-auto">
@@ -971,7 +1060,7 @@ function SwapRouteSelector({
 
           return (
             <button
-              key={idx}
+              key={`${route.aggregator}-${idx}`}
               type="button"
               onClick={() => setSwapRoute((prev) => ({ ...prev, selected: route }))}
               className={`flex flex-row items-center justify-between px-2 py-1.5 transition-colors hover:bg-accent hover:cursor-pointer ${isSelected ? "bg-accent" : ""}`}

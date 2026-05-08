@@ -7,14 +7,13 @@ import {
 import SendNativeTokenForm from "@/components/send-native-token-form";
 import SendErc20TokenForm from "@/components/send-erc20-token-form";
 import SendErc721TokenForm from "@/components/send-erc721-token-form";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
+  Field,
+  FieldContent,
+  FieldLabel,
+  FieldTitle,
+} from "@/components/ui/field"
 import SendBatchNativeTokenForm from "./send-batch-native-token-form";
 import SendBatchErc20TokenForm from "./send-batch-erc20-token-form";
 import SendBatchErc721TokenForm from "./send-batch-erc721-token-form";
@@ -50,7 +49,6 @@ export default function SendComponent() {
 
   // define forms
   const forms = [
-    { label: "Select an asset type", value: "" },
     { label: nativeSymbol, value: "native" },
     { label: "Token", value: "token" },
     { label: "NFT", value: "nft" },
@@ -73,22 +71,22 @@ export default function SendComponent() {
           </TabsList>
           <TabsContent value="single">
             <div className="flex flex-col gap-1 mt-2">
-              <Select value={selectedSingleAsset} onValueChange={handleSelectedSingleAssetChange}>
-                <SelectTrigger className="w-64">
-                  <SelectValue placeholder="Select asset type">
-                    {(value: string | null) => forms.find((f) => f.value === value)?.label ?? "Select asset type"}
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectContent alignItemWithTrigger={false}>
-                  <SelectGroup>
-                    {forms.map((form) => (
-                      <SelectItem key={form.value} value={form.value}>
-                        {form.label}
-                      </SelectItem>
-                    ))}
-                  </SelectGroup>
-                </SelectContent>
-              </Select>
+              <RadioGroup
+                value={selectedSingleAsset}
+                onValueChange={handleSelectedSingleAssetChange}
+                className="grid grid-cols-3 gap-2"
+              >
+                {forms.map((form) => (
+                  <FieldLabel key={form.value} htmlFor={`single-${form.value}`}>
+                    <Field orientation="horizontal">
+                      <FieldContent>
+                        <FieldTitle>{form.label}</FieldTitle>
+                      </FieldContent>
+                      <RadioGroupItem value={form.value} id={`single-${form.value}`} />
+                    </Field>
+                  </FieldLabel>
+                ))}
+              </RadioGroup>
               {selectedSingleAsset === "native" && (
                 <SendNativeTokenForm selectedChain={connection.chain?.id || null} />
               )}
@@ -102,22 +100,22 @@ export default function SendComponent() {
           </TabsContent>
           <TabsContent value="batch" className="flex flex-col gap-4">
             <div className="flex flex-col gap-1 mt-2">
-              <Select value={selectedBatchAsset} onValueChange={handleSelectedBatchAssetChange}>
-                <SelectTrigger className="w-64">
-                  <SelectValue placeholder="Select asset type">
-                    {(value: string | null) => forms.find((f) => f.value === value)?.label ?? "Select asset type"}
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectContent alignItemWithTrigger={false}>
-                  <SelectGroup>
-                    {forms.map((form) => (
-                      <SelectItem key={form.value} value={form.value}>
-                        {form.label}
-                      </SelectItem>
-                    ))}
-                  </SelectGroup>
-                </SelectContent>
-              </Select>
+              <RadioGroup
+                value={selectedBatchAsset}
+                onValueChange={handleSelectedBatchAssetChange}
+                className="grid grid-cols-3 gap-2"
+              >
+                {forms.map((form) => (
+                  <FieldLabel key={form.value} htmlFor={`batch-${form.value}`}>
+                    <Field orientation="horizontal">
+                      <FieldContent>
+                        <FieldTitle>{form.label}</FieldTitle>
+                      </FieldContent>
+                      <RadioGroupItem value={form.value} id={`batch-${form.value}`} />
+                    </Field>
+                  </FieldLabel>
+                ))}
+              </RadioGroup>
               {selectedBatchAsset === "native" && (
                 <SendBatchNativeTokenForm selectedChain={connection.chain?.id || null} /> 
               )}
