@@ -35,6 +35,7 @@ import { TokenPickerDialog, type TokenListToken } from "@/components/token-picke
 import { Kbd } from "@/components/ui/kbd";
 import { TransactionStatus } from "@/components/transaction-status";
 import { InformationDialog } from "@/components/information-dialog";
+import { SwapInspectRouteDialog } from "@/components/swap-inspect-route";
 import { ETH_ADDRESS } from "@/lib/constants";
 
 
@@ -724,7 +725,13 @@ function SwapForm() {
         {/* ── Swap Info ───────────────────────────────── */}
         <div className="flex flex-col gap-2 border-t border-border pt-2">
           <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between text-xs gap-1 lg:gap-0">
-            <p className="text-muted-foreground">Max slippage</p>
+            <div className="flex flex-row items-center gap-1">
+              <p className="text-muted-foreground">Max slippage</p>
+              <InformationDialog
+                title="Max slippage"
+                content="Max slippage is the maximum amount of slippage you are willing to accept for the swap. Slippage is the difference between the expected price of the swap and the actual price of the swap. The higher the slippage, the more likely you are to get a worse price for the swap."
+              />
+            </div>
             <div className="flex items-center gap-1">
               {SLIPPAGE_PRESETS.map((preset) => (
                 <button
@@ -778,8 +785,14 @@ function SwapForm() {
             </div>
           </div>
           <div className="flex flex-row items-center justify-between text-xs">
-            <p className="text-muted-foreground">Fee</p>
-            <p>Free</p>
+            <div className="flex flex-row items-center gap-1">
+              <p className="text-muted-foreground">Fee</p>
+              <InformationDialog
+                title="Swap fee"
+                content="UnitMetal charges 0.1% for all swaps and is used to cover the cost of running the platform. The fee is deducted from the output amount of the swap so the output amount you see is the amount you will receive after the fee."
+              />
+            </div>
+            <p>0.1%</p>
           </div>
           {!isNativeTokenIn && (
             <div className="flex flex-row items-center justify-between text-xs">
@@ -1034,7 +1047,7 @@ function SwapRouteSelector({
         <p>Swap Routes</p>
         <InformationDialog
           title="Swap Routes"
-          content="Select a route provider below to swap. Routes are sorted by the best output amount. zFi routes come from the on-chain quoter; other routes come from the swap aggregator API."
+          content="Select a route provider below to swap. Routes are sorted by the best output amount."
         />
       </div>
       <div className="flex flex-col max-h-32 overflow-y-auto">
@@ -1059,18 +1072,31 @@ function SwapRouteSelector({
           const formatted = formatUnits(BigInt(route.amountOut), tokenOutDecimals);
 
           return (
-            <button
+            <div
               key={`${route.aggregator}-${idx}`}
-              type="button"
+              role="button"
+              tabIndex={0}
               onClick={() => setSwapRoute((prev) => ({ ...prev, selected: route }))}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  setSwapRoute((prev) => ({ ...prev, selected: route }));
+                }
+              }}
               className={`flex flex-row items-center justify-between px-2 py-1.5 transition-colors hover:bg-accent hover:cursor-pointer ${isSelected ? "bg-accent" : ""}`}
             >
               <div className="flex flex-row items-center gap-2">
                 <Check className={`w-3 h-3 shrink-0 ${isSelected ? "opacity-100" : "opacity-0"}`} />
                 <span className="font-medium">{route.aggregator}</span>
               </div>
-              <span>{formatted}</span>
-            </button>
+              <div className="flex flex-row items-center gap-2">
+                <span>{formatted}</span>
+                <SwapInspectRouteDialog
+                  route={route}
+                  tokenOutDecimals={tokenOutDecimals}
+                />
+              </div>
+            </div>
           );
         })}
       </div>
