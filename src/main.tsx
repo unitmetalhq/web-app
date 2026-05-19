@@ -23,7 +23,7 @@ const config = createConfig({
   chains: [mainnet],
   connectors: [injected(), impersonatorConnector],
   transports: {
-    [mainnet.id]: http(import.meta.env.VITE_MAINNET_RPC_URL!),
+    [mainnet.id]: http(import.meta.env.VITE_RPC_URL_ETHEREUM!),
     // [base.id]: http(import.meta.env.VITE_RPC_URL_BASE!),
     // [arbitrum.id]: http(import.meta.env.VITE_RPC_URL_ARBITRUM!),
   },
