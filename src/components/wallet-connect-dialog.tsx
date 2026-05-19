@@ -13,7 +13,7 @@
 //   - Disconnect button
 
 import { useState } from "react";
-import { useConnection, useConnect, useConnectors, useDisconnect, useEnsAddress } from "wagmi";
+import { useConnection, useConnect, useConnectors, useDisconnect, useEnsAddress, useEnsName } from "wagmi";
 import { isAddress } from "viem";
 import { normalize } from "viem/ens";
 import { useForm, useStore, type AnyFieldApi } from "@tanstack/react-form";
@@ -81,6 +81,16 @@ export function WalletConnectButton() {
 
   const isImpersonator = connection.connector?.id === "impersonator";
   const [copied, setCopied] = useState(false);
+
+  // Resolve the connected address to an ENS name (mainnet only) so the trigger
+  // and connected view can show the name instead of the raw hex. Only addresses
+  // with a primary name set in the ENS Reverse Registrar will resolve — a
+  // forward record pointing name→address is not enough.
+  const { data: connectedEnsName } = useEnsName({
+    address: connection.address,
+    chainId: 1,
+    query: { enabled: !!connection.address },
+  });
 
   // ── TanStack Form for the impersonator address input ──────────────────────
   const impersonatorForm = useForm({
@@ -181,7 +191,7 @@ export function WalletConnectButton() {
       >
         {connection.isConnected ? (
           <span className="flex items-center gap-1.5">
-            {truncateAddress(connection.address)}
+            {connectedEnsName ?? truncateAddress(connection.address)}
             {isImpersonator && (
               <Badge className="text-[10px] px-1 py-0 rounded-none">
                 <View />
@@ -203,7 +213,7 @@ export function WalletConnectButton() {
 
             <div className="flex flex-row gap-2 items-center">
               <p className="font-mono text-xs break-all text-muted-foreground underline underline-offset-4">
-                {connection.address}
+                {connectedEnsName ?? connection.address}
               </p>
               <button
                 type="button"
@@ -291,7 +301,7 @@ export function WalletConnectButton() {
                           }
                         }}
                       >
-                        {truncateAddress(addr)}
+                        <HistoryAddressText address={addr} />
                       </button>
 
                       {/* Ellipsis menu — extra click required before delete appears */}
@@ -434,4 +444,16 @@ function ImpersonatorAddressFieldInfo({
   if (ensAddress) return <em className="text-xs text-green-500">{ensAddress}</em>;
   if (ensAddress === null) return <em className="text-xs text-destructive">ENS name not found</em>;
   return <em className="text-xs text-green-500">ok!</em>;
+}
+
+// ── HistoryAddressText ────────────────────────────────────────────────────────
+// One ENS lookup per history row. Each row is its own component so `useEnsName`
+// can be called once per address without violating rules-of-hooks in a loop.
+
+function HistoryAddressText({ address }: { address: string }) {
+  const { data: ensName } = useEnsName({
+    address: address as `0x${string}`,
+    chainId: 1,
+  });
+  return <>{ensName ?? truncateAddress(address)}</>;
 }
